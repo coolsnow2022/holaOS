@@ -131,6 +131,7 @@ jobs:
     env:
       RELEASE_TAG: ${{ needs.ensure-runtime-release.outputs.release_tag }}
       RUNTIME_ARTIFACT_NAME: holaboss-runtime-macos-${{ github.sha }}
+      RUNTIME_RELEASE_ASSET_NAME: holaboss-runtime-macos.tar.gz
       DESKTOP_ASSET_PREFIX: holaboss-desktop-macos
       DESKTOP_RELEASE_ASSET_NAME: Holaboss-macos-arm64.dmg
       MAC_CERTIFICATE: ${{ secrets.MAC_CERTIFICATE }}
@@ -164,7 +165,7 @@ jobs:
         if: ${{ env.MAC_CERTIFICATE == '' || env.MAC_CERTIFICATE_PASSWORD == '' || env.APPLE_ID == '' || env.APPLE_APP_SPECIFIC_PASSWORD == '' || env.APPLE_TEAM_ID == '' }}
         working-directory: desktop
         env:
-          HOLABOSS_RUNTIME_TARBALL: ${{ github.workspace }}/out/runtime-artifact/holaboss-runtime-macos-${{ github.sha }}.tar.gz
+          HOLABOSS_RUNTIME_TARBALL: ${{ github.workspace }}/out/runtime-artifact/${{ env.RUNTIME_RELEASE_ASSET_NAME }}
           HOLABOSS_AUTH_BASE_URL: ${{ vars.HOLABOSS_AUTH_BASE_URL }}
           HOLABOSS_AUTH_SIGN_IN_URL: ${{ vars.HOLABOSS_AUTH_SIGN_IN_URL }}
           HOLABOSS_BACKEND_BASE_URL: ${{ vars.HOLABOSS_BACKEND_BASE_URL }}
@@ -184,7 +185,7 @@ jobs:
         if: ${{ env.MAC_CERTIFICATE != '' && env.MAC_CERTIFICATE_PASSWORD != '' && env.APPLE_ID != '' && env.APPLE_APP_SPECIFIC_PASSWORD != '' && env.APPLE_TEAM_ID != '' }}
         working-directory: desktop
         env:
-          HOLABOSS_RUNTIME_TARBALL: ${{ github.workspace }}/out/runtime-artifact/holaboss-runtime-macos-${{ github.sha }}.tar.gz
+          HOLABOSS_RUNTIME_TARBALL: ${{ github.workspace }}/out/runtime-artifact/${{ env.RUNTIME_RELEASE_ASSET_NAME }}
           HOLABOSS_AUTH_BASE_URL: ${{ vars.HOLABOSS_AUTH_BASE_URL }}
           HOLABOSS_AUTH_SIGN_IN_URL: ${{ vars.HOLABOSS_AUTH_SIGN_IN_URL }}
           HOLABOSS_BACKEND_BASE_URL: ${{ vars.HOLABOSS_BACKEND_BASE_URL }}
