@@ -1,0 +1,121 @@
+{
+  "name": "holaboss-local",
+  "private": true,
+  "version": "0.1.0",
+  "main": "out/dist-electron/main.cjs",
+  "scripts": {
+    "clean": "rm -rf out build",
+    "rebuild:native": "node ./node_modules/@electron/rebuild/lib/cli.js -f -w better-sqlite3",
+    "predev": "kill-port 5173 && npm run rebuild:native && node scripts/ensure-runtime-bundle.mjs",
+    "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:electron:build\" \"npm:dev:electron:run\"",
+    "dev:cp:local": "cross-env HOLABOSS_INTERNAL_DEV=1 npm run dev",
+    "dev:cp:local:verbose": "cross-env HOLABOSS_INTERNAL_DEV=1 HOLABOSS_VERBOSE_TELEMETRY=1 npm run dev",
+    "dev:cp:dev": "cross-env HOLABOSS_INTERNAL_DEV=1 npm run dev",
+    "dev:cp:dev:verbose": "cross-env HOLABOSS_INTERNAL_DEV=1 HOLABOSS_VERBOSE_TELEMETRY=1 npm run dev",
+    "dev:cp:prod": "npm run dev",
+    "dev:cp:prod:verbose": "cross-env HOLABOSS_VERBOSE_TELEMETRY=1 npm run dev",
+    "dev:renderer": "vite",
+    "dev:electron:build": "tsup --config tsup.config.ts --watch",
+    "dev:electron:run": "wait-on tcp:5173 file:out/dist-electron/main.cjs && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electronmon out/dist-electron/main.cjs",
+    "prepare:runtime": "node scripts/stage-runtime-bundle.mjs",
+    "prepare:runtime:linux": "cross-env HOLABOSS_RUNTIME_PLATFORM=linux node scripts/stage-runtime-bundle.mjs",
+    "prepare:runtime:local": "node scripts/prepare-runtime-local.mjs",
+    "build": "npm run build:renderer && npm run build:electron",
+    "build:renderer": "vite build",
+    "build:electron": "tsup --config tsup.config.ts --minify",
+    "typecheck": "tsc --noEmit",
+    "preview": "vite preview",
+    "dist:mac": "npm run prepare:runtime && npm run build && electron-builder --mac dir --arm64 --config.mac.identity=null",
+    "dist:mac:local": "npm run prepare:runtime:local && npm run build && electron-builder --mac dir --arm64 --config.mac.identity=null",
+    "dist:mac:dmg": "npm run prepare:runtime && npm run build && electron-builder --mac dmg --arm64 --config.mac.identity=null",
+    "dist:mac:dmg:local": "npm run prepare:runtime:local && npm run build && electron-builder --mac dmg --arm64 --config.mac.identity=null",
+    "dist:win": "npm run build && electron-builder --win nsis --x64",
+    "packaged:run": "node scripts/run-packaged.mjs",
+    "packaged:run:local": "cross-env HOLABOSS_INTERNAL_DEV=1 npm run packaged:run",
+    "packaged:run:local:verbose": "cross-env HOLABOSS_INTERNAL_DEV=1 HOLABOSS_VERBOSE_TELEMETRY=1 npm run packaged:run",
+    "packaged:run:dev": "cross-env HOLABOSS_INTERNAL_DEV=1 npm run packaged:run",
+    "packaged:run:dev:verbose": "cross-env HOLABOSS_INTERNAL_DEV=1 HOLABOSS_VERBOSE_TELEMETRY=1 npm run packaged:run",
+    "packaged:run:prod": "npm run packaged:run",
+    "packaged:run:prod:verbose": "cross-env HOLABOSS_VERBOSE_TELEMETRY=1 npm run packaged:run"
+  },
+  "dependencies": {
+    "@better-auth/electron": "^1.5.5",
+    "better-auth": "^1.5.5",
+    "better-sqlite3": "^12.8.0",
+    "conf": "^15.1.0",
+    "dotenv": "^16.6.1",
+    "highlight.js": "^11.11.1",
+    "lucide-react": "^0.542.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^24.3.0",
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^5.0.4",
+    "autoprefixer": "^10.4.21",
+    "concurrently": "^9.2.1",
+    "@electron/rebuild": "^4.0.1",
+    "cross-env": "^10.0.0",
+    "electron": "^38.0.0",
+    "electron-builder": "^26.0.12",
+    "electronmon": "^2.0.3",
+    "kill-port": "^2.0.1",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^3.4.17",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.3",
+    "vite": "^8.0.0",
+    "wait-on": "^8.0.5"
+  },
+  "build": {
+    "appId": "com.holaboss.workspace",
+    "productName": "Holaboss Workspace",
+    "directories": {
+      "output": "out/release"
+    },
+    "files": [
+      "out/dist/**/*",
+      "out/dist-electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "out/runtime-macos",
+        "to": "runtime-macos",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "asar": true,
+    "protocols": [
+      {
+        "name": "Holaboss Auth Callback",
+        "schemes": [
+          "ai.holaboss.app"
+        ]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools"
+    },
+    "win": {
+      "signAndEditExecutable": false,
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
