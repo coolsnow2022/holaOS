@@ -24,6 +24,7 @@
     "prepare:runtime": "node scripts/stage-runtime-bundle.mjs",
     "prepare:runtime:linux": "cross-env HOLABOSS_RUNTIME_PLATFORM=linux node scripts/stage-runtime-bundle.mjs",
     "prepare:runtime:local": "node scripts/prepare-runtime-local.mjs",
+    "prepare:packaged-config": "node scripts/write-packaged-config.mjs",
     "build": "npm run build:renderer && npm run build:electron",
     "build:renderer": "vite build",
     "build:electron": "tsup --config tsup.config.ts --minify",
@@ -89,6 +90,10 @@
       "package.json"
     ],
     "extraResources": [
+      {
+        "from": "out/holaboss-config.json",
+        "to": "holaboss-config.json"
+      },
       {
         "from": "out/runtime-macos",
         "to": "runtime-macos",

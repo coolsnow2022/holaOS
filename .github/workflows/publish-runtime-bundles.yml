@@ -163,10 +163,18 @@ jobs:
         working-directory: desktop
         env:
           HOLABOSS_RUNTIME_TARBALL: ${{ github.workspace }}/out/runtime-artifact/holaboss-runtime-macos-${{ github.sha }}.tar.gz
+          HOLABOSS_AUTH_BASE_URL: ${{ vars.HOLABOSS_AUTH_BASE_URL }}
+          HOLABOSS_AUTH_SIGN_IN_URL: ${{ vars.HOLABOSS_AUTH_SIGN_IN_URL }}
+          HOLABOSS_BACKEND_BASE_URL: ${{ vars.HOLABOSS_BACKEND_BASE_URL }}
+          HOLABOSS_DESKTOP_CONTROL_PLANE_BASE_URL: ${{ vars.HOLABOSS_DESKTOP_CONTROL_PLANE_BASE_URL }}
+          HOLABOSS_PROJECTS_URL: ${{ vars.HOLABOSS_PROJECTS_URL }}
+          HOLABOSS_MARKETPLACE_URL: ${{ vars.HOLABOSS_MARKETPLACE_URL }}
+          HOLABOSS_PROACTIVE_URL: ${{ vars.HOLABOSS_PROACTIVE_URL }}
           GITHUB_TOKEN: ${{ github.token }}
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: |
           npm run prepare:runtime
+          npm run prepare:packaged-config
           npm run build
           npx electron-builder --projectDir "$PWD" --publish never --mac dmg --arm64 -c.mac.identity=null
 
@@ -175,6 +183,13 @@ jobs:
         working-directory: desktop
         env:
           HOLABOSS_RUNTIME_TARBALL: ${{ github.workspace }}/out/runtime-artifact/holaboss-runtime-macos-${{ github.sha }}.tar.gz
+          HOLABOSS_AUTH_BASE_URL: ${{ vars.HOLABOSS_AUTH_BASE_URL }}
+          HOLABOSS_AUTH_SIGN_IN_URL: ${{ vars.HOLABOSS_AUTH_SIGN_IN_URL }}
+          HOLABOSS_BACKEND_BASE_URL: ${{ vars.HOLABOSS_BACKEND_BASE_URL }}
+          HOLABOSS_DESKTOP_CONTROL_PLANE_BASE_URL: ${{ vars.HOLABOSS_DESKTOP_CONTROL_PLANE_BASE_URL }}
+          HOLABOSS_PROJECTS_URL: ${{ vars.HOLABOSS_PROJECTS_URL }}
+          HOLABOSS_MARKETPLACE_URL: ${{ vars.HOLABOSS_MARKETPLACE_URL }}
+          HOLABOSS_PROACTIVE_URL: ${{ vars.HOLABOSS_PROACTIVE_URL }}
           GITHUB_TOKEN: ${{ github.token }}
           CSC_LINK: ${{ env.MAC_CERTIFICATE }}
           CSC_KEY_PASSWORD: ${{ env.MAC_CERTIFICATE_PASSWORD }}
@@ -183,6 +198,7 @@ jobs:
           APPLE_TEAM_ID: ${{ env.APPLE_TEAM_ID }}
         run: |
           npm run prepare:runtime
+          npm run prepare:packaged-config
           npm run build
           npx electron-builder --projectDir "$PWD" --publish never --mac dmg --arm64
 

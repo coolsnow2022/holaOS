@@ -241,6 +241,33 @@ const DESKTOP_USER_DATA_DIR = (process.env.HOLABOSS_DESKTOP_USER_DATA_DIR?.trim(
   "_"
 );
 const normalizeBaseUrl = (value: string): string => value.trim().replace(/\/+$/, "");
+interface PackagedDesktopConfig {
+  authBaseUrl?: string;
+  authSignInUrl?: string;
+  backendBaseUrl?: string;
+  desktopControlPlaneBaseUrl?: string;
+  projectsUrl?: string;
+  marketplaceUrl?: string;
+  proactiveUrl?: string;
+}
+
+function loadPackagedDesktopConfig(): PackagedDesktopConfig {
+  if (!app.isPackaged) {
+    return {};
+  }
+
+  const configPath = path.join(process.resourcesPath, "holaboss-config.json");
+  try {
+    if (!existsSync(configPath)) {
+      return {};
+    }
+    return JSON.parse(readFileSync(configPath, "utf8")) as PackagedDesktopConfig;
+  } catch {
+    return {};
+  }
+}
+
+const packagedDesktopConfig = loadPackagedDesktopConfig();
 const INTERNAL_DEV_BACKEND_OVERRIDES_ENABLED =
   Boolean(process.env.VITE_DEV_SERVER_URL) || process.env.HOLABOSS_INTERNAL_DEV?.trim() === "1";
 function internalOverride(envName: string): string {
@@ -252,21 +279,33 @@ function internalOverride(envName: string): string {
 function publicRuntimeEnv(envName: string): string {
   return process.env[envName]?.trim() || "";
 }
-function configuredRemoteBaseUrl(...envNames: string[]): string {
+function configuredRemoteBaseUrl(
+  envNames: string[],
+  packagedValue?: string
+): string {
   for (const envName of envNames) {
     const value = normalizeBaseUrl(internalOverride(envName) || publicRuntimeEnv(envName));
     if (value) {
       return value;
     }
   }
+  if (packagedValue) {
+    return normalizeBaseUrl(packagedValue);
+  }
   return "";
 }
-const AUTH_BASE_URL = configuredRemoteBaseUrl("HOLABOSS_AUTH_BASE_URL");
-const BACKEND_BASE_URL = configuredRemoteBaseUrl("HOLABOSS_BACKEND_BASE_URL");
+const AUTH_BASE_URL = configuredRemoteBaseUrl(["HOLABOSS_AUTH_BASE_URL"], packagedDesktopConfig.authBaseUrl);
+const BACKEND_BASE_URL = configuredRemoteBaseUrl(["HOLABOSS_BACKEND_BASE_URL"], packagedDesktopConfig.backendBaseUrl);
 const DESKTOP_CONTROL_PLANE_BASE_URL =
   serviceBaseUrlFromControlPlane(BACKEND_BASE_URL, 3060) ||
-  configuredRemoteBaseUrl("HOLABOSS_DESKTOP_CONTROL_PLANE_BASE_URL");
-const AUTH_SIGN_IN_URL = configuredRemoteBaseUrl("HOLABOSS_AUTH_SIGN_IN_URL");
+  configuredRemoteBaseUrl(
+    ["HOLABOSS_DESKTOP_CONTROL_PLANE_BASE_URL"],
+    packagedDesktopConfig.desktopControlPlaneBaseUrl
+  );
+const AUTH_SIGN_IN_URL = configuredRemoteBaseUrl(
+  ["HOLABOSS_AUTH_SIGN_IN_URL"],
+  packagedDesktopConfig.authSignInUrl
+);
 const DESKTOP_RUNTIME_BINDING_EXCHANGE_PATH = "/api/v1/desktop-runtime/bindings/exchange";
 const AUTH_CALLBACK_PROTOCOL = "ai.holaboss.app";
 const LOCAL_RUNTIME_SCHEMA_VERSION = 1;
@@ -788,14 +827,17 @@ interface HolabossSessionStreamDebugEntry {
 const DEFAULT_PROJECTS_URL =
   internalOverride("HOLABOSS_PROJECTS_URL") ||
   internalOverride("HOLABOSS_CLI_PROJECTS_URL") ||
+  normalizeBaseUrl(packagedDesktopConfig.projectsUrl || "") ||
   serviceBaseUrlFromControlPlane(DESKTOP_CONTROL_PLANE_BASE_URL, 3033);
 const DEFAULT_MARKETPLACE_URL =
   internalOverride("HOLABOSS_MARKETPLACE_URL") ||
   internalOverride("HOLABOSS_CLI_MARKETPLACE_URL") ||
+  normalizeBaseUrl(packagedDesktopConfig.marketplaceUrl || "") ||
   serviceBaseUrlFromControlPlane(DESKTOP_CONTROL_PLANE_BASE_URL, 3037);
 const DEFAULT_PROACTIVE_URL =
   internalOverride("HOLABOSS_PROACTIVE_URL") ||
   internalOverride("HOLABOSS_CLI_PROACTIVE_URL") ||
+  normalizeBaseUrl(packagedDesktopConfig.proactiveUrl || "") ||
   serviceBaseUrlFromControlPlane(DESKTOP_CONTROL_PLANE_BASE_URL, 3032);
 
 const sessionOutputStreams = new Map<string, AbortController>();
