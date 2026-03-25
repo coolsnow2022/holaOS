@@ -197,9 +197,19 @@ holaboss_runtime_start_api() {
   export SANDBOX_RUNTIME_API_HOST="${SANDBOX_RUNTIME_API_HOST:-${SANDBOX_AGENT_BIND_HOST:-0.0.0.0}}"
   export SANDBOX_RUNTIME_API_PORT="${SANDBOX_RUNTIME_API_PORT:-${SANDBOX_AGENT_BIND_PORT:-8080}}"
 
-  local runtime_api_entry="${HOLABOSS_RUNTIME_APP_ROOT%/}/../api-server/dist/index.mjs"
+  local runtime_api_entry=""
+  local candidate=""
+  for candidate in \
+    "${HOLABOSS_RUNTIME_APP_ROOT%/}/api-server/dist/index.mjs" \
+    "${HOLABOSS_RUNTIME_APP_ROOT%/}/../api-server/dist/index.mjs"
+  do
+    if [ -f "${candidate}" ]; then
+      runtime_api_entry="${candidate}"
+      break
+    fi
+  done
   if [ ! -f "${runtime_api_entry}" ]; then
-    holaboss_runtime_log "runtime api entrypoint not found: ${runtime_api_entry}"
+    holaboss_runtime_log "runtime api entrypoint not found under HOLABOSS_RUNTIME_APP_ROOT=${HOLABOSS_RUNTIME_APP_ROOT}"
     exit 1
   fi
   if ! command -v "${HOLABOSS_RUNTIME_NODE_BIN}" >/dev/null 2>&1; then
