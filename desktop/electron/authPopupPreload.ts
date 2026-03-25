@@ -37,6 +37,45 @@ interface RuntimeConfigUpdatePayload {
   controlPlaneBaseUrl?: string | null;
 }
 
+interface RuntimeStatusPayload {
+  status: "disabled" | "missing" | "starting" | "running" | "stopped" | "error";
+  available: boolean;
+  runtimeRoot: string | null;
+  sandboxRoot: string | null;
+  executablePath: string | null;
+  url: string | null;
+  pid: number | null;
+  harness: string | null;
+  desktopBrowserReady: boolean;
+  desktopBrowserUrl: string | null;
+  lastError: string;
+}
+
+interface WorkspaceRecordPayload {
+  id: string;
+  name: string;
+  status: string;
+  harness: string | null;
+  main_session_id: string | null;
+  error_message: string | null;
+  onboarding_status: string;
+  onboarding_session_id: string | null;
+  onboarding_completed_at: string | null;
+  onboarding_completion_summary: string | null;
+  onboarding_requested_at: string | null;
+  onboarding_requested_by: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  deleted_at_utc: string | null;
+}
+
+interface WorkspaceListResponsePayload {
+  items: WorkspaceRecordPayload[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 const INTERNAL_DEV_BACKEND_OVERRIDES_ENABLED =
   Boolean(process.env.VITE_DEV_SERVER_URL) || process.env.HOLABOSS_INTERNAL_DEV?.trim() === "1";
 const normalizeBaseUrl = (value: string): string => value.trim().replace(/\/+$/, "");
@@ -79,9 +118,11 @@ contextBridge.exposeInMainWorld("authPopup", {
   requestAuth: () => ipcRenderer.invoke("auth:requestAuth") as Promise<void>,
   signOut: () => ipcRenderer.invoke("auth:signOut") as Promise<void>,
   getRuntimeConfig: () => ipcRenderer.invoke("runtime:getConfig") as Promise<RuntimeConfigPayload>,
+  getRuntimeStatus: () => ipcRenderer.invoke("runtime:getStatus") as Promise<RuntimeStatusPayload>,
   setRuntimeConfig: (payload: RuntimeConfigUpdatePayload) =>
     ipcRenderer.invoke("runtime:setConfig", payload) as Promise<RuntimeConfigPayload>,
   exchangeBinding: (sandboxId: string) => ipcRenderer.invoke("runtime:exchangeBinding", sandboxId) as Promise<RuntimeConfigPayload>,
+  listWorkspaces: () => ipcRenderer.invoke("workspace:listWorkspaces") as Promise<WorkspaceListResponsePayload>,
   close: () => ipcRenderer.invoke("auth:closePopup") as Promise<void>,
   onAuthenticated: (listener: (user: AuthUserPayload) => void) => {
     const wrapped = (_event: Electron.IpcRendererEvent, user: AuthUserPayload) => listener(user);
@@ -97,5 +138,15 @@ contextBridge.exposeInMainWorld("authPopup", {
     const wrapped = (_event: Electron.IpcRendererEvent, payload: AuthErrorPayload) => listener(payload);
     ipcRenderer.on("auth:error", wrapped);
     return () => ipcRenderer.removeListener("auth:error", wrapped);
+  },
+  onRuntimeConfigChange: (listener: (payload: RuntimeConfigPayload) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, payload: RuntimeConfigPayload) => listener(payload);
+    ipcRenderer.on("runtime:config", wrapped);
+    return () => ipcRenderer.removeListener("runtime:config", wrapped);
+  },
+  onRuntimeStateChange: (listener: (payload: RuntimeStatusPayload) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, payload: RuntimeStatusPayload) => listener(payload);
+    ipcRenderer.on("runtime:state", wrapped);
+    return () => ipcRenderer.removeListener("runtime:state", wrapped);
   }
 });

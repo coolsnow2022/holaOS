@@ -8,6 +8,7 @@ interface TopTabsBarProps {
   theme: AppTheme;
   onThemeChange: (theme: AppTheme) => void;
   agentMode?: boolean;
+  hasWorkspaces?: boolean;
   onUserMenuToggle?: (anchorBounds: BrowserAnchorBoundsPayload) => void;
   onOpenBrowserWorkbench?: () => void;
   onOpenFilesWorkbench?: () => void;
@@ -15,11 +16,6 @@ interface TopTabsBarProps {
   activeWorkbenchTab?: "browser" | "files" | null;
   workbenchOpen?: boolean;
   operationsDrawerOpen?: boolean;
-  runtimeIndicator?: {
-    label: string;
-    detail: string;
-    status?: RuntimeStatusPayload["status"] | null;
-  };
 }
 
 const THEME_OPTIONS: Array<{ value: AppTheme; label: string }> = [
@@ -38,14 +34,14 @@ export function TopTabsBar({
   theme,
   onThemeChange,
   agentMode = true,
+  hasWorkspaces = true,
   onUserMenuToggle,
   onOpenBrowserWorkbench,
   onOpenFilesWorkbench,
   onToggleOperationsDrawer,
   activeWorkbenchTab,
   workbenchOpen,
-  operationsDrawerOpen,
-  runtimeIndicator
+  operationsDrawerOpen
 }: TopTabsBarProps) {
   const userButtonRef = useRef<HTMLButtonElement | null>(null);
   const [workspaceSwitcherOpen, setWorkspaceSwitcherOpen] = useState(false);
@@ -70,8 +66,6 @@ export function TopTabsBar({
     canUseMarketplaceTemplates,
     marketplaceTemplatesError,
     workspaceErrorMessage,
-    lifecycleSteps,
-    setupStatus,
     onboardingModeActive,
     sessionModeLabel,
     refreshWorkspaceData,
@@ -220,7 +214,7 @@ export function TopTabsBar({
                 <span>Refresh</span>
               </button>
 
-              {agentMode ? (
+              {agentMode && hasWorkspaces ? (
                 <>
                   <button
                     type="button"
@@ -376,55 +370,6 @@ export function TopTabsBar({
               </div>
             ) : null}
 
-            {setupStatus ? (
-              <div
-                className={`mt-2 rounded-[14px] border px-3 py-2 text-[11px] ${
-                  setupStatus.tone === "success"
-                    ? "border-neon-green/30 bg-neon-green/10 text-text-main/92"
-                    : setupStatus.tone === "warning"
-                      ? "border-[rgba(255,153,102,0.24)] bg-[rgba(255,153,102,0.08)] text-[rgba(255,212,189,0.92)]"
-                      : "border-panel-border/45 bg-[var(--theme-subtle-bg)] text-text-main/86"
-                }`}
-              >
-                {setupStatus.message}
-              </div>
-            ) : null}
-
-            {lifecycleSteps.length ? (
-              <div className="mt-2 grid gap-2 xl:grid-cols-5">
-                {lifecycleSteps.map((step) => (
-                  <div
-                    key={step.id}
-                    className={`rounded-[14px] border px-3 py-2 ${
-                      step.state === "done"
-                        ? "border-neon-green/30 bg-neon-green/10"
-                        : step.state === "current"
-                          ? "border-sky-400/30 bg-sky-400/10"
-                          : step.state === "error"
-                            ? "border-[rgba(255,153,102,0.24)] bg-[rgba(255,153,102,0.08)]"
-                            : "border-panel-border/45 bg-[var(--theme-subtle-bg)]"
-                    }`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={`h-2 w-2 rounded-full ${
-                          step.state === "done"
-                            ? "bg-neon-green"
-                            : step.state === "current"
-                              ? "bg-sky-300"
-                              : step.state === "error"
-                                ? "bg-[rgba(255,186,145,0.95)]"
-                                : "bg-text-dim/50"
-                        }`}
-                      />
-                      <span className="text-[10px] uppercase tracking-[0.14em] text-text-dim/72">{step.label}</span>
-                    </div>
-                    <div className="mt-2 text-[10px] leading-5 text-text-main/82">{step.detail}</div>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-
             {workspaceErrorMessage ? (
               <div className="mt-2 rounded-[14px] border border-[rgba(255,153,102,0.24)] bg-[rgba(255,153,102,0.08)] px-3 py-2 text-[11px] text-[rgba(255,212,189,0.92)]">
                 {workspaceErrorMessage}
@@ -434,28 +379,6 @@ export function TopTabsBar({
         </div>
 
         <div className="flex shrink-0 items-center gap-1 sm:gap-2">
-          {runtimeIndicator ? (
-            <div
-              title={runtimeIndicator.detail}
-              aria-label={runtimeIndicator.label}
-              className="theme-control-surface hidden h-8 items-center gap-2 rounded-[var(--theme-radius-pill)] border border-panel-border px-3 text-[11px] text-text-muted/78 lg:inline-flex"
-            >
-              <span
-                className={`h-2 w-2 shrink-0 rounded-full ${
-                  runtimeIndicator.status === "running"
-                    ? "bg-neon-green shadow-glow"
-                    : runtimeIndicator.status === "starting"
-                      ? "bg-amber-300"
-                      : runtimeIndicator.status === "error" ||
-                          runtimeIndicator.status === "stopped" ||
-                          runtimeIndicator.status === "missing"
-                        ? "bg-rose-300"
-                        : "bg-text-muted/45"
-                }`}
-              />
-              <span className="truncate">{runtimeIndicator.label}</span>
-            </div>
-          ) : null}
           <label className="theme-control-surface hidden items-center gap-2 rounded-[var(--theme-radius-pill)] border border-panel-border px-3 py-1.5 text-xs text-text-muted/85 lg:flex">
             <Palette size={13} className="text-neon-green/80" />
             <select
@@ -470,7 +393,7 @@ export function TopTabsBar({
               ))}
             </select>
           </label>
-          {agentMode ? (
+          {agentMode && hasWorkspaces ? (
             <button
               type="button"
               onClick={onToggleOperationsDrawer}
