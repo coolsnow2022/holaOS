@@ -76,7 +76,22 @@ function sessionUserId(session: AuthSession | null): string {
 }
 
 function normalizeErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : "Request failed.";
+  const message = error instanceof Error ? error.message : "Request failed.";
+  const normalized = message.trim().toLowerCase();
+
+  if (normalized.includes("workspace:listworkspaces")) {
+    return "Couldn't load workspace state right now. The local runtime may still be starting.";
+  }
+
+  if (normalized.includes("internal server error")) {
+    return "The local runtime hit an internal error. Try again in a moment.";
+  }
+
+  if (normalized.includes("error invoking remote method")) {
+    return "The desktop app couldn't complete that request. Try again in a moment.";
+  }
+
+  return message;
 }
 
 function normalizedOnboardingStatus(workspace: WorkspaceRecordPayload | null): string {

@@ -4183,7 +4183,12 @@ function emitRuntimeState() {
     return;
   }
   lastRuntimeStateSignature = nextSignature;
-  mainWindow.webContents.send("runtime:state", runtimeStatus);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("runtime:state", runtimeStatus);
+  }
+  if (authPopupWindow && !authPopupWindow.isDestroyed()) {
+    authPopupWindow.webContents.send("runtime:state", runtimeStatus);
+  }
 }
 
 async function emitRuntimeConfig(config?: RuntimeConfigPayload) {
@@ -5018,6 +5023,60 @@ function createAuthPopupHtml() {
         text-transform: uppercase;
         color: rgba(181, 195, 188, 0.72);
       }
+      .statusGrid {
+        display: grid;
+        gap: 10px;
+      }
+      .statusStep {
+        border-radius: 16px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        background: rgba(255, 255, 255, 0.03);
+        padding: 12px 14px;
+      }
+      .statusStep.done {
+        border-color: rgba(87, 255, 173, 0.2);
+        background: rgba(87, 255, 173, 0.08);
+      }
+      .statusStep.current {
+        border-color: rgba(125, 211, 252, 0.22);
+        background: rgba(125, 211, 252, 0.08);
+      }
+      .statusStep.error {
+        border-color: rgba(251, 146, 146, 0.24);
+        background: rgba(251, 146, 146, 0.08);
+      }
+      .statusHeader {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .statusDot {
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        background: rgba(181, 195, 188, 0.5);
+      }
+      .statusStep.done .statusDot {
+        background: rgba(87, 255, 173, 0.95);
+      }
+      .statusStep.current .statusDot {
+        background: rgba(125, 211, 252, 0.95);
+      }
+      .statusStep.error .statusDot {
+        background: rgba(251, 146, 146, 0.95);
+      }
+      .statusLabel {
+        font-size: 10px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: rgba(181, 195, 188, 0.72);
+      }
+      .statusDetail {
+        margin-top: 8px;
+        font-size: 11px;
+        line-height: 1.6;
+        color: rgba(236, 239, 243, 0.88);
+      }
       .field {
         display: grid;
         gap: 6px;
@@ -5083,6 +5142,13 @@ function createAuthPopupHtml() {
           </div>
         </div>
 
+        <div class="section">
+          <div class="section-title">Status</div>
+          <div id="statusSummary" class="footnote" style="margin-top: 0;"></div>
+          <div id="statusSteps" class="statusGrid"></div>
+          <div id="statusError" class="message error" hidden></div>
+        </div>
+
         <div class="actions">
           <button id="signIn" class="button primary" type="button">Sign in with browser</button>
           <button id="refresh" class="button" type="button">Refresh session</button>
@@ -5140,6 +5206,8 @@ function createAuthPopupHtml() {
       const state = {
         user: null,
         runtimeConfig: null,
+        runtimeStatus: null,
+        workspaces: [],
         isPending: true,
         isStartingSignIn: false,
         isSaving: false,
@@ -5165,6 +5233,9 @@ function createAuthPopupHtml() {
         profileStatus: document.getElementById("profileStatus"),
         runtimeStatus: document.getElementById("runtimeStatus"),
         sandboxStatus: document.getElementById("sandboxStatus"),
+        statusSummary: document.getElementById("statusSummary"),
+        statusSteps: document.getElementById("statusSteps"),
+        statusError: document.getElementById("statusError"),
         signIn: document.getElementById("signIn"),
         refresh: document.getElementById("refresh"),
         signOut: document.getElementById("signOut"),
@@ -5217,6 +5288,125 @@ function createAuthPopupHtml() {
         return parts.join(" - ");
       };
 
+      const runtimeStateLabel = (runtimeStatus, isSignedIn, runtimeBindingReady) => {
+        if (runtimeStatus?.status === "running") {
+          return "Running";
+        }
+        if (runtimeStatus?.status === "starting") {
+          return "Starting";
+        }
+        if (runtimeStatus?.status === "error") {
+          return "Error";
+        }
+        if (runtimeStatus?.status === "missing") {
+          return "Missing";
+        }
+        if (runtimeStatus?.status === "disabled") {
+          return "Disabled";
+        }
+        if (runtimeStatus?.status === "stopped") {
+          return "Stopped";
+        }
+        if (runtimeBindingReady) {
+          return "Ready";
+        }
+        return isSignedIn ? "Finishing setup" : "Offline";
+      };
+
+      const normalizedWorkspaceStatus = (workspace) => ((workspace && typeof workspace.status === "string" ? workspace.status : "").trim().toLowerCase());
+
+      const pickStatusWorkspace = (workspaces) => {
+        if (!Array.isArray(workspaces) || workspaces.length === 0) {
+          return null;
+        }
+        return workspaces.find((workspace) => normalizedWorkspaceStatus(workspace) === "active") || workspaces[0] || null;
+      };
+
+      const lifecycleSteps = () => {
+        const isSignedIn = Boolean(sessionUserId(state.user));
+        const runtimeProvisioned = Boolean(state.runtimeConfig?.authTokenPresent);
+        const sandboxAssigned = Boolean((state.runtimeConfig?.sandboxId || "").trim());
+        const desktopBrowserReady = Boolean(state.runtimeStatus?.desktopBrowserReady);
+        const runtimeFailed = state.runtimeStatus?.status === "error";
+        const workspace = pickStatusWorkspace(state.workspaces);
+        const workspaceStatus = normalizedWorkspaceStatus(workspace);
+        const workspaceFailed = workspaceStatus === "error";
+        const workspaceReady = workspaceStatus === "active";
+
+        return [
+          {
+            label: "Signed in",
+            state: isSignedIn ? "done" : "current",
+            detail: isSignedIn ? "Desktop auth session is available." : "Sign in to sync product-backed desktop state."
+          },
+          {
+            label: "Runtime provisioned",
+            state: runtimeFailed ? "error" : runtimeProvisioned ? "done" : isSignedIn ? "current" : "pending",
+            detail: runtimeFailed
+              ? state.runtimeStatus?.lastError || "Embedded runtime failed to start."
+              : runtimeProvisioned
+                ? "Runtime token and binding are loaded."
+                : "Waiting for runtime token provisioning."
+          },
+          {
+            label: "Sandbox assigned",
+            state: sandboxAssigned ? "done" : runtimeProvisioned ? "current" : "pending",
+            detail: sandboxAssigned
+              ? "Sandbox " + state.runtimeConfig.sandboxId
+              : "Waiting for a sandbox assignment in runtime config."
+          },
+          {
+            label: "Desktop browser ready",
+            state: desktopBrowserReady ? "done" : state.runtimeStatus?.status === "starting" ? "current" : "pending",
+            detail: desktopBrowserReady
+              ? "Desktop browser service is registered for agent-triggered browsing."
+              : "Desktop browser service has not finished registering yet."
+          },
+          {
+            label: "Workspace ready",
+            state: workspaceFailed ? "error" : workspaceReady ? "done" : workspace ? "current" : "pending",
+            detail: workspaceFailed
+              ? workspace?.error_message || "Workspace provisioning failed."
+              : workspaceReady
+                ? (workspace?.name || "Workspace") + " is active."
+                : workspace
+                  ? "Current workspace status: " + workspace.status + "."
+                  : "Create or select a workspace to finish desktop routing."
+          }
+        ];
+      };
+
+      const statusSummary = () => {
+        const workspace = pickStatusWorkspace(state.workspaces);
+        const parts = [];
+        parts.push(Array.isArray(state.workspaces) && state.workspaces.length ? state.workspaces.length + " workspace" + (state.workspaces.length === 1 ? "" : "s") : "no workspaces");
+        if (workspace) {
+          parts.push("focused status " + workspace.name);
+        }
+        if (state.runtimeStatus?.status) {
+          parts.push("runtime " + state.runtimeStatus.status);
+        }
+        return parts.join(" - ");
+      };
+
+      const renderLifecycleSteps = () => {
+        const steps = lifecycleSteps();
+        els.statusSummary.textContent = statusSummary();
+        els.statusSteps.innerHTML = steps.map((step) => (
+          '<div class="statusStep ' + step.state + '">' +
+            '<div class="statusHeader">' +
+              '<span class="statusDot"></span>' +
+              '<span class="statusLabel">' + step.label + '</span>' +
+            '</div>' +
+            '<div class="statusDetail">' + step.detail + '</div>' +
+          '</div>'
+        )).join("");
+
+        const workspaceError = pickStatusWorkspace(state.workspaces)?.error_message || "";
+        els.statusError.hidden = !workspaceError;
+        els.statusError.textContent = workspaceError;
+      };
+
       const syncFormFromConfig = (config) => {
         const defaults = window.authPopup.getDefaults();
         state.runtimeConfig = config;
@@ -5263,8 +5453,9 @@ function createAuthPopupHtml() {
         els.badge.textContent = badgeLabel;
         els.badge.className = "badge " + badgeTone;
         els.profileStatus.textContent = isSignedIn ? "Connected" : "Sign in required";
-        els.runtimeStatus.textContent = runtimeBindingReady ? "Ready on this desktop" : isSignedIn ? "Finishing setup" : "Offline";
+        els.runtimeStatus.textContent = runtimeStateLabel(state.runtimeStatus, isSignedIn, runtimeBindingReady);
         els.sandboxStatus.textContent = state.sandboxId || "Will be assigned automatically";
+        renderLifecycleSteps();
         els.sandboxId.value = state.sandboxId;
         els.runtimeUserId.value = state.runtimeUserId;
         els.modelProxyBaseUrl.value = state.modelProxyBaseUrl;
@@ -5317,6 +5508,17 @@ function createAuthPopupHtml() {
       const refreshConfig = async () => {
         const config = await window.authPopup.getRuntimeConfig();
         syncFormFromConfig(config);
+        render();
+      };
+
+      const refreshRuntimeStatus = async () => {
+        state.runtimeStatus = await window.authPopup.getRuntimeStatus();
+        render();
+      };
+
+      const refreshWorkspaces = async () => {
+        const response = await window.authPopup.listWorkspaces();
+        state.workspaces = Array.isArray(response?.items) ? response.items : [];
         render();
       };
 
@@ -5431,6 +5633,7 @@ function createAuthPopupHtml() {
         if (!state.runtimeUserId.trim()) {
           state.runtimeUserId = sessionUserId(user);
         }
+        void refreshWorkspaces();
         render();
       });
 
@@ -5441,6 +5644,7 @@ function createAuthPopupHtml() {
         if (!state.runtimeUserId.trim()) {
           state.runtimeUserId = sessionUserId(user);
         }
+        void refreshWorkspaces();
         render();
       });
 
@@ -5450,7 +5654,17 @@ function createAuthPopupHtml() {
         render();
       });
 
-      Promise.all([refreshSession(), refreshConfig()]).then(() => render());
+      window.authPopup.onRuntimeConfigChange((config) => {
+        syncFormFromConfig(config);
+        render();
+      });
+
+      window.authPopup.onRuntimeStateChange((runtimeStatus) => {
+        state.runtimeStatus = runtimeStatus;
+        render();
+      });
+
+      Promise.all([refreshSession(), refreshConfig(), refreshRuntimeStatus(), refreshWorkspaces()]).then(() => render());
     </script>
   </body>
 </html>`;
