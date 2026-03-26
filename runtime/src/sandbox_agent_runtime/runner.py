@@ -100,6 +100,7 @@ _WORKSPACE_MCP_READY_TIMEOUT_S = 10.0
 _WORKSPACE_MCP_READY_POLL_S = 0.2
 _WORKSPACE_MCP_LOCK_TIMEOUT_S = 15.0
 _OPENCODE_LOCK_TIMEOUT_S = 15.0
+_OPENCODE_APP_BOOTSTRAP_TIMEOUT_S = 600.0
 _SESSION_STATE_DIR_NAME = ".holaboss"
 _SESSION_STATE_FILE_NAME = "harness-session-state.json"
 _SESSION_STATE_VERSION = 1
@@ -1724,7 +1725,7 @@ async def _start_opencode_apps_via_runtime_api(
         ],
     }
     url = f"{_sandbox_runtime_api_url()}/api/v1/internal/workspaces/{request.workspace_id}/opencode-apps/start"
-    async with httpx.AsyncClient(timeout=60.0, trust_env=False) as client:
+    async with httpx.AsyncClient(timeout=_OPENCODE_APP_BOOTSTRAP_TIMEOUT_S, trust_env=False) as client:
         response = await client.post(url, json=payload)
     response.raise_for_status()
     response_payload = response.json()

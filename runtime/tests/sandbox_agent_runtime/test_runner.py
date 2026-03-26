@@ -247,6 +247,9 @@ async def test_start_opencode_apps_via_runtime_api_posts_bootstrap_payload(monke
             }
 
     class _FakeClient:
+        def __init__(self, **kwargs):
+            captured["client_kwargs"] = kwargs
+
         async def __aenter__(self):
             return self
 
@@ -260,7 +263,7 @@ async def test_start_opencode_apps_via_runtime_api_posts_bootstrap_payload(monke
             return _FakeResponse()
 
     monkeypatch.setenv("SANDBOX_RUNTIME_API_URL", "http://runtime.example")
-    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: _FakeClient())
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
 
     entries = await runner_module._start_opencode_apps_via_runtime_api(
         request=request,
@@ -281,6 +284,7 @@ async def test_start_opencode_apps_via_runtime_api_posts_bootstrap_payload(monke
         },
     )
     assert captured == {
+        "client_kwargs": {"timeout": runner_module._OPENCODE_APP_BOOTSTRAP_TIMEOUT_S, "trust_env": False},
         "url": "http://runtime.example/api/v1/internal/workspaces/workspace-1/opencode-apps/start",
         "json": {
             "workspace_dir": "/tmp/workspace-1",
