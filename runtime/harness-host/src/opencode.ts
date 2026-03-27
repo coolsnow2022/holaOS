@@ -870,24 +870,39 @@ async function createSession(client: ReturnType<typeof createOpencodeClient>): P
   return sessionID;
 }
 
+export async function resolveOpencodeSessionId(params: {
+  requestedSessionId?: string | null;
+  persistedSessionId?: string | null;
+  sessionExists: (sessionId: string) => Promise<boolean>;
+  createSession: () => Promise<string>;
+}): Promise<string> {
+  const requested = firstNonEmptyString(params.requestedSessionId) ?? "";
+  const persisted = firstNonEmptyString(params.persistedSessionId) ?? "";
+
+  if (requested) {
+    if (await params.sessionExists(requested)) {
+      return requested;
+    }
+    return await params.createSession();
+  }
+
+  if (persisted && (await params.sessionExists(persisted))) {
+    return persisted;
+  }
+
+  return await params.createSession();
+}
+
 async function ensureSession(
   client: ReturnType<typeof createOpencodeClient>,
   request: OpencodeHarnessHostRequest
 ): Promise<string> {
-  const requested = firstNonEmptyString(request.harness_session_id) ?? "";
-  const persisted = firstNonEmptyString(request.persisted_harness_session_id) ?? "";
-  let sessionID = requested || persisted;
-
-  if (!sessionID) {
-    return await createSession(client);
-  }
-  if (await sessionExists(client, sessionID)) {
-    return sessionID;
-  }
-  if (persisted && persisted !== sessionID && (await sessionExists(client, persisted))) {
-    return persisted;
-  }
-  return await createSession(client);
+  return await resolveOpencodeSessionId({
+    requestedSessionId: request.harness_session_id,
+    persistedSessionId: request.persisted_harness_session_id,
+    sessionExists: async (sessionID) => await sessionExists(client, sessionID),
+    createSession: async () => await createSession(client),
+  });
 }
 
 export async function runOpencode(request: OpencodeHarnessHostRequest): Promise<number> {

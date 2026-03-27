@@ -5,6 +5,7 @@ import {
   createOpencodeEventMapperState,
   mapOpencodeEvent,
   promptPartsForRequest,
+  resolveOpencodeSessionId,
   shouldEmitOpencodeEvent,
 } from "./opencode.js";
 import type { OpencodeHarnessHostRequest } from "./contracts.js";
@@ -249,6 +250,50 @@ test("mapOpencodeEvent maps idle session status to completion and flushes unreso
       },
     },
   ]);
+});
+
+test("resolveOpencodeSessionId creates a fresh session when the requested session does not exist", async () => {
+  const checks: string[] = [];
+  let created = 0;
+
+  const sessionID = await resolveOpencodeSessionId({
+    requestedSessionId: "runtime-session-1",
+    persistedSessionId: "persisted-session-1",
+    sessionExists: async (candidate) => {
+      checks.push(candidate);
+      return candidate === "persisted-session-1";
+    },
+    createSession: async () => {
+      created += 1;
+      return "created-session-1";
+    },
+  });
+
+  assert.equal(sessionID, "created-session-1");
+  assert.deepEqual(checks, ["runtime-session-1"]);
+  assert.equal(created, 1);
+});
+
+test("resolveOpencodeSessionId reuses the persisted session only when no requested session is provided", async () => {
+  const checks: string[] = [];
+  let created = 0;
+
+  const sessionID = await resolveOpencodeSessionId({
+    requestedSessionId: null,
+    persistedSessionId: "persisted-session-1",
+    sessionExists: async (candidate) => {
+      checks.push(candidate);
+      return candidate === "persisted-session-1";
+    },
+    createSession: async () => {
+      created += 1;
+      return "created-session-1";
+    },
+  });
+
+  assert.equal(sessionID, "persisted-session-1");
+  assert.deepEqual(checks, ["persisted-session-1"]);
+  assert.equal(created, 0);
 });
 
 test("shouldEmitOpencodeEvent filters step markers and prompt echo", () => {
