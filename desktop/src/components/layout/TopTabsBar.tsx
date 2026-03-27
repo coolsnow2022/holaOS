@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
-import { Search, User2, Loader2, Plus, ChevronDown, FolderKanban, Globe } from "lucide-react";
+import { Search, User2, Loader2, Plus, ChevronDown, FolderKanban, Globe, Trash2 } from "lucide-react";
 import { useWorkspaceDesktop } from "@/lib/workspaceDesktop";
 import { useWorkspaceSelection } from "@/lib/workspaceSelection";
 
@@ -31,6 +31,9 @@ export function TopTabsBar({
     selectedWorkspace,
     templateSourceMode,
     setTemplateSourceMode,
+    createHarnessOptions,
+    selectedCreateHarness,
+    setSelectedCreateHarness,
     selectedTemplateFolder,
     marketplaceTemplates,
     selectedMarketplaceTemplate,
@@ -38,17 +41,42 @@ export function TopTabsBar({
     newWorkspaceName,
     setNewWorkspaceName,
     isCreatingWorkspace,
+    deletingWorkspaceId,
     isLoadingMarketplaceTemplates,
     canUseMarketplaceTemplates,
     marketplaceTemplatesError,
     workspaceErrorMessage,
     chooseTemplateFolder,
-    createWorkspace
+    createWorkspace,
+    deleteWorkspace
   } = useWorkspaceDesktop();
+
+  const createDisabled =
+    isCreatingWorkspace ||
+    (templateSourceMode === "marketplace"
+      ? !canUseMarketplaceTemplates || !selectedMarketplaceTemplate || selectedMarketplaceTemplate.is_coming_soon
+      : templateSourceMode === "local"
+        ? !selectedTemplateFolder?.rootPath
+        : false);
 
   const onCreateWorkspace = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     void createWorkspace();
+  };
+
+  const onDeleteWorkspace = async (workspace: WorkspaceRecordPayload) => {
+    if (deletingWorkspaceId) {
+      return;
+    }
+    const confirmed = window.confirm(`Delete workspace '${workspace.name}'?`);
+    if (!confirmed) {
+      return;
+    }
+    try {
+      await deleteWorkspace(workspace.id);
+    } catch {
+      // workspaceErrorMessage is already set by the shared desktop state
+    }
   };
 
   const closeWorkspaceSwitcher = () => {
@@ -71,11 +99,13 @@ export function TopTabsBar({
       return;
     }
 
-    openAuthPopup(userButtonRef.current.getBoundingClientRect());
-  };
-
-  const scheduleUserMenuClose = (delayMs?: number) => {
-    void window.electronAPI.auth.scheduleClosePopup(delayMs);
+    const anchor = userButtonRef.current.getBoundingClientRect();
+    void window.electronAPI.auth.togglePopup({
+      x: anchor.left,
+      y: anchor.top,
+      width: anchor.width,
+      height: anchor.height
+    });
   };
 
   const filteredWorkspaces = useMemo(() => {
@@ -183,27 +213,42 @@ export function TopTabsBar({
                     <div className="grid gap-2">
                       {filteredWorkspaces.map((workspace) => {
                         const isActive = workspace.id === selectedWorkspaceId;
+                        const isDeleting = deletingWorkspaceId === workspace.id;
                         return (
-                          <button
+                          <div
                             key={workspace.id}
-                            type="button"
-                            onClick={() => {
-                              setSelectedWorkspaceId(workspace.id);
-                              closeWorkspaceSwitcher();
-                            }}
-                            className={`w-full rounded-[14px] border px-3 py-2 text-left transition ${
+                            className={`flex items-stretch gap-2 rounded-[14px] border px-2 py-2 transition ${
                               isActive
                                 ? "border-neon-green/45 bg-neon-green/10 text-text-main"
                                 : "border-panel-border/35 bg-transparent text-text-main/86 hover:border-neon-green/30 hover:bg-[var(--theme-hover-bg)]"
-                            }`}
+                            } ${isDeleting ? "opacity-60" : ""}`}
                           >
-                            <div className="truncate text-[12px] font-medium">{workspace.name}</div>
-                            <div className="mt-1 flex flex-wrap gap-2 text-[10px] uppercase tracking-[0.14em] text-text-dim/72">
-                              <span>{workspace.status}</span>
-                              {workspace.harness ? <span>{workspace.harness}</span> : null}
-                              {workspace.onboarding_status ? <span>onboarding {workspace.onboarding_status}</span> : null}
-                            </div>
-                          </button>
+                            <button
+                              type="button"
+                              disabled={isDeleting}
+                              onClick={() => {
+                                setSelectedWorkspaceId(workspace.id);
+                                closeWorkspaceSwitcher();
+                              }}
+                              className="min-w-0 flex-1 px-1 text-left disabled:cursor-not-allowed"
+                            >
+                              <div className="truncate text-[12px] font-medium">{workspace.name}</div>
+                              <div className="mt-1 flex flex-wrap gap-2 text-[10px] uppercase tracking-[0.14em] text-text-dim/72">
+                                <span>{workspace.status}</span>
+                                {workspace.harness ? <span>{workspace.harness}</span> : null}
+                                {workspace.onboarding_status ? <span>onboarding {workspace.onboarding_status}</span> : null}
+                              </div>
+                            </button>
+                            <button
+                              type="button"
+                              aria-label={`Delete workspace ${workspace.name}`}
+                              disabled={Boolean(deletingWorkspaceId)}
+                              onClick={() => void onDeleteWorkspace(workspace)}
+                              className="inline-flex h-9 w-9 shrink-0 items-center justify-center self-center rounded-[12px] border border-panel-border/45 text-text-dim/72 transition hover:border-red-400/45 hover:bg-red-500/10 hover:text-red-200 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {isDeleting ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                            </button>
+                          </div>
                         );
                       })}
                     </div>
@@ -252,6 +297,17 @@ export function TopTabsBar({
                         >
                           Marketplace
                         </button>
+                        <button
+                          type="button"
+                          onClick={() => setTemplateSourceMode("empty")}
+                          className={`inline-flex h-[38px] items-center justify-center rounded-[14px] border px-3 text-[11px] transition ${
+                            templateSourceMode === "empty"
+                              ? "border-neon-green/45 bg-neon-green/10 text-neon-green"
+                              : "border-panel-border/45 text-text-muted hover:border-neon-green/35 hover:text-text-main"
+                          }`}
+                        >
+                          Empty
+                        </button>
                       </div>
 
                       <div className="grid gap-2">
@@ -287,6 +343,11 @@ export function TopTabsBar({
                               Sign in to use Marketplace
                             </button>
                           )
+                        ) : templateSourceMode === "empty" ? (
+                          <div className="theme-control-surface min-w-0 rounded-[16px] border border-panel-border/45 px-3 py-2 text-[12px] text-text-muted/82">
+                            <div className="text-[10px] uppercase tracking-[0.14em] text-text-dim/72">Scaffold</div>
+                            <div className="mt-1 text-text-main">workspace.yaml + AGENTS.md + empty skills folder</div>
+                          </div>
                         ) : (
                           <button
                             type="button"
@@ -307,14 +368,24 @@ export function TopTabsBar({
                           className="theme-control-surface min-w-0 rounded-[16px] border border-panel-border/45 bg-transparent px-3 py-2 text-[12px] text-text-main outline-none placeholder:text-text-dim/40"
                         />
 
+                        <label className="theme-control-surface flex min-w-0 items-center gap-2 rounded-[16px] border border-panel-border/45 px-3 py-2 text-left text-[12px] text-text-muted/82">
+                          <span className="shrink-0 text-[10px] uppercase tracking-[0.14em] text-text-dim/72">Harness</span>
+                          <select
+                            value={selectedCreateHarness}
+                            onChange={(event) => setSelectedCreateHarness(event.target.value)}
+                            className="min-w-0 flex-1 bg-transparent text-[12px] text-text-main outline-none"
+                          >
+                            {createHarnessOptions.map((option) => (
+                              <option key={option.id} value={option.id}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+
                         <button
                           type="submit"
-                          disabled={
-                            isCreatingWorkspace ||
-                            (templateSourceMode === "marketplace"
-                              ? !selectedMarketplaceTemplate || selectedMarketplaceTemplate.is_coming_soon
-                              : !selectedTemplateFolder?.rootPath)
-                          }
+                          disabled={createDisabled}
                           className="inline-flex h-[42px] items-center justify-center gap-2 rounded-[16px] border border-neon-green/40 bg-neon-green/10 px-3 text-[12px] text-neon-green transition hover:bg-neon-green/14 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           {isCreatingWorkspace ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
@@ -337,6 +408,10 @@ export function TopTabsBar({
                       ) : selectedTemplateFolder ? (
                         <div className="text-[11px] text-text-dim/78">
                           {selectedTemplateFolder.description || selectedTemplateFolder.rootPath || "Template folder selected."}
+                        </div>
+                      ) : templateSourceMode === "empty" ? (
+                        <div className="text-[11px] text-text-dim/78">
+                          Creates a minimal workspace with `workspace.yaml`, an empty `AGENTS.md`, and an empty `skills/` folder.
                         </div>
                       ) : null}
                     </form>
@@ -369,8 +444,6 @@ export function TopTabsBar({
             ref={userButtonRef}
             type="button"
             aria-label="Open account menu"
-            onMouseEnter={showUserMenu}
-            onMouseLeave={() => scheduleUserMenuClose()}
             onClick={showUserMenu}
             className="grid h-11 w-11 shrink-0 place-items-center rounded-[18px] border border-panel-border/45 text-text-muted transition-all duration-200 hover:border-neon-green/45 hover:bg-neon-green/10 hover:text-neon-green active:scale-95"
           >

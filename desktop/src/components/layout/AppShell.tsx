@@ -184,6 +184,9 @@ function FirstWorkspacePane() {
   const {
     templateSourceMode,
     setTemplateSourceMode,
+    createHarnessOptions,
+    selectedCreateHarness,
+    setSelectedCreateHarness,
     selectedTemplateFolder,
     marketplaceTemplates,
     selectedMarketplaceTemplate,
@@ -198,6 +201,8 @@ function FirstWorkspacePane() {
     chooseTemplateFolder,
     createWorkspace
   } = useWorkspaceDesktop();
+  const selectedCreateHarnessOption =
+    createHarnessOptions.find((option) => option.id === selectedCreateHarness) ?? createHarnessOptions[0];
 
   const openAuthPopup = () => {
     if (!authButtonRef.current) {
@@ -217,7 +222,9 @@ function FirstWorkspacePane() {
     !newWorkspaceName.trim() ||
     (templateSourceMode === "marketplace"
       ? !canUseMarketplaceTemplates || !selectedMarketplaceTemplate || selectedMarketplaceTemplate.is_coming_soon
-      : !selectedTemplateFolder?.rootPath);
+      : templateSourceMode === "local"
+        ? !selectedTemplateFolder?.rootPath
+        : false);
 
   const handleCreateWorkspace = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -275,7 +282,7 @@ function FirstWorkspacePane() {
             </p>
           </div>
 
-          <div className="mt-9 grid gap-4 lg:grid-cols-2">
+          <div className="mt-9 grid gap-4 lg:grid-cols-3">
             <FirstWorkspaceChoiceCard
               title="Local Template"
               description="Use a folder from your disk."
@@ -304,6 +311,16 @@ function FirstWorkspacePane() {
                   return;
                 }
                 setTemplateSourceMode("marketplace");
+              }}
+            />
+            <FirstWorkspaceChoiceCard
+              title="Empty Workspace"
+              description="Start with a minimal scaffold."
+              detail="workspace.yaml + AGENTS.md + empty skills/"
+              icon={<span className="text-[18px] leading-none">+</span>}
+              active={templateSourceMode === "empty"}
+              onClick={() => {
+                setTemplateSourceMode("empty");
               }}
             />
           </div>
@@ -365,14 +382,22 @@ function FirstWorkspacePane() {
                 <div className="theme-control-surface inline-flex items-center gap-2 rounded-full border border-panel-border/45 px-3 py-2 text-[11px] uppercase tracking-[0.18em] text-text-dim/78">
                   {templateSourceMode === "marketplace" ? (
                     <Sparkles size={13} className="text-neon-green/82" />
+                  ) : templateSourceMode === "empty" ? (
+                    <span className="text-neon-green/82">+</span>
                   ) : (
                     <FolderOpen size={13} className="text-neon-green/82" />
                   )}
-                  <span>{templateSourceMode === "marketplace" ? "Marketplace source" : "Local source"}</span>
+                  <span>
+                    {templateSourceMode === "marketplace"
+                      ? "Marketplace source"
+                      : templateSourceMode === "empty"
+                        ? "Empty scaffold"
+                        : "Local source"}
+                  </span>
                 </div>
               </div>
 
-              <div className="grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,0.8fr)]">
                 <label className="grid gap-2">
                   <span className="text-[11px] uppercase tracking-[0.22em] text-text-dim/78">Workspace name</span>
                   <input
@@ -405,6 +430,13 @@ function FirstWorkspacePane() {
                       )}
                     </select>
                   </label>
+                ) : templateSourceMode === "empty" ? (
+                  <div className="grid gap-2">
+                    <span className="text-[11px] uppercase tracking-[0.22em] text-text-dim/78">Workspace scaffold</span>
+                    <div className="theme-control-surface flex h-12 items-center rounded-[18px] border border-panel-border/45 px-4 text-[14px] text-text-main">
+                      Minimal `workspace.yaml` + `AGENTS.md` + empty `skills/`
+                    </div>
+                  </div>
                 ) : (
                   <div className="grid gap-2">
                     <span className="text-[11px] uppercase tracking-[0.22em] text-text-dim/78">Template source</span>
@@ -420,14 +452,41 @@ function FirstWorkspacePane() {
                     </button>
                   </div>
                 )}
+
+                <label className="grid gap-2">
+                  <span className="text-[11px] uppercase tracking-[0.22em] text-text-dim/78">Harness</span>
+                  <select
+                    value={selectedCreateHarness}
+                    onChange={(event) => setSelectedCreateHarness(event.target.value)}
+                    className="theme-control-surface h-12 rounded-[18px] border border-panel-border/45 px-4 text-[14px] text-text-main outline-none"
+                  >
+                    {createHarnessOptions.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
               </div>
             </div>
 
             <div className="grid gap-4">
               <div className="theme-control-surface rounded-[22px] border border-panel-border/45 px-4 py-4 text-left lg:min-h-full">
                 <div className="flex items-center gap-2 text-[12px] font-medium text-text-main">
-                  {templateSourceMode === "marketplace" ? <Sparkles size={15} /> : <FolderOpen size={15} />}
-                  <span>{templateSourceMode === "marketplace" ? "Marketplace Template" : "Local Template"}</span>
+                  {templateSourceMode === "marketplace" ? (
+                    <Sparkles size={15} />
+                  ) : templateSourceMode === "empty" ? (
+                    <span className="text-[18px] leading-none">+</span>
+                  ) : (
+                    <FolderOpen size={15} />
+                  )}
+                  <span>
+                    {templateSourceMode === "marketplace"
+                      ? "Marketplace Template"
+                      : templateSourceMode === "empty"
+                        ? "Empty Workspace"
+                        : "Local Template"}
+                  </span>
                   {templateSourceMode === "marketplace" ? (
                     <span
                       className={`rounded-full border px-2 py-1 text-[10px] uppercase tracking-[0.16em] ${
@@ -450,9 +509,18 @@ function FirstWorkspacePane() {
                       selectedMarketplaceTemplate?.long_description ||
                       selectedMarketplaceTemplate?.description ||
                       "Choose a curated template to bootstrap your workspace."
+                    : templateSourceMode === "empty"
+                      ? "Create a blank workspace with the smallest valid workspace.yaml, an empty AGENTS.md, and an empty skills directory."
                     : selectedTemplateFolder?.description ||
                       selectedTemplateFolder?.rootPath ||
                       "Pick a folder from your machine and Holaboss will use it as the template source."}
+                </div>
+                <div className="mt-4 rounded-[16px] border border-panel-border/35 px-3 py-3">
+                  <div className="text-[10px] uppercase tracking-[0.18em] text-text-dim/72">Harness</div>
+                  <div className="mt-1 text-[13px] font-medium text-text-main">{selectedCreateHarnessOption?.label || "OpenCode"}</div>
+                  <div className="mt-1 text-[12px] leading-6 text-text-muted/78">
+                    {selectedCreateHarnessOption?.description || "Default harness with backend bootstrapping and structured output support."}
+                  </div>
                 </div>
                 {templateSourceMode === "marketplace" && !canUseMarketplaceTemplates ? (
                   <button

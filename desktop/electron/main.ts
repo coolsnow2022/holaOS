@@ -36,7 +36,7 @@ const HISTORY_POPUP_HEIGHT = 420;
 const AUTH_POPUP_WIDTH = 380;
 const AUTH_POPUP_HEIGHT = 460;
 const AUTH_POPUP_CLOSE_DELAY_MS = 260;
-const AUTH_POPUP_HOVER_BRIDGE_PX = 24;
+const AUTH_POPUP_MARGIN_PX = 8;
 const OVERFLOW_POPUP_WIDTH = 220;
 const OVERFLOW_POPUP_HEIGHT = 88;
 const ADDRESS_SUGGESTIONS_POPUP_MIN_HEIGHT = 88;
@@ -1455,7 +1455,9 @@ interface WorkspaceOutputListResponsePayload {
 
 interface HolabossCreateWorkspacePayload {
   holaboss_user_id: string;
+  harness?: string | null;
   name: string;
+  template_mode?: "template" | "empty" | null;
   template_root_path?: string | null;
   template_name?: string | null;
   template_ref?: string | null;
@@ -3636,15 +3638,20 @@ async function requestRuntimeJsonViaHttp<T>(
   timeoutMs = 15000
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
+    const serializedPayload = payload === undefined ? null : JSON.stringify(payload);
     const request = httpRequest(
       {
         hostname: targetUrl.hostname,
         port: targetUrl.port || "80",
         path: `${targetUrl.pathname}${targetUrl.search}`,
         method,
-        headers: {
-          "Content-Type": "application/json"
-        },
+        headers:
+          serializedPayload === null
+            ? undefined
+            : {
+                "Content-Type": "application/json",
+                "Content-Length": Buffer.byteLength(serializedPayload)
+              },
         timeout: timeoutMs
       },
       (response) => {
@@ -3679,8 +3686,8 @@ async function requestRuntimeJsonViaHttp<T>(
       reject(error);
     });
 
-    if (payload !== undefined) {
-      request.write(JSON.stringify(payload));
+    if (serializedPayload !== null) {
+      request.write(serializedPayload);
     }
     request.end();
   });
@@ -3727,6 +3734,18 @@ async function requestRuntimeJson<T>({
 
 function workspaceHarness() {
   return (process.env.HOLABOSS_RUNTIME_HARNESS || "opencode").trim().toLowerCase() || "opencode";
+}
+
+function normalizeRequestedWorkspaceHarness(value: string | null | undefined): string {
+  const normalized = value?.trim().toLowerCase() || "opencode";
+  if (normalized === "opencode" || normalized === "pi") {
+    return normalized;
+  }
+  throw new Error(`Unsupported workspace harness '${value}'.`);
+}
+
+function requestedWorkspaceTemplateMode(payload: HolabossCreateWorkspacePayload): "template" | "empty" {
+  return payload.template_mode === "empty" ? "empty" : "template";
 }
 
 function workspaceDirectoryPath(workspaceId: string) {
@@ -4177,16 +4196,35 @@ function renderMinimalWorkspaceYaml(workspace: WorkspaceRecordPayload, template:
   ].join("\n");
 }
 
+function renderEmptyWorkspaceYaml() {
+  return [
+    "agents:",
+    "  id: workspace.general",
+    "  model: openai/gpt-5",
+    "skills:",
+    "  path: skills",
+    "mcp_registry:",
+    "  allowlist:",
+    "    tool_ids: []",
+    "  servers: {}"
+  ].join("\n");
+}
+
 async function createWorkspace(payload: HolabossCreateWorkspacePayload): Promise<WorkspaceResponsePayload> {
   await ensureRuntimeBindingReadyForWorkspaceFlow("workspace_create");
   const mainSessionId = crypto.randomUUID();
-  const harness = workspaceHarness();
+  const harness = normalizeRequestedWorkspaceHarness(payload.harness);
+  const templateMode = requestedWorkspaceTemplateMode(payload);
   const templateRootPath = payload.template_root_path?.trim() || "";
   const templateName = payload.template_name?.trim() || "";
-  let materializedTemplate: MaterializeTemplateResponsePayload;
-  if (templateRootPath) {
+  let materializedTemplate: MaterializeTemplateResponsePayload | null = null;
+  let resolvedTemplate: ResolvedTemplatePayload | null = null;
+  if (templateMode === "empty") {
+    resolvedTemplate = null;
+  } else if (templateRootPath) {
     try {
       materializedTemplate = await materializeLocalTemplate({ template_root_path: templateRootPath });
+      resolvedTemplate = materializedTemplate.template;
     } catch (error) {
       throw new Error(contextualWorkspaceCreateError("Couldn't materialize the local template", error));
     }
@@ -4198,6 +4236,7 @@ async function createWorkspace(payload: HolabossCreateWorkspacePayload): Promise
         template_ref: payload.template_ref,
         template_commit: payload.template_commit
       });
+      resolvedTemplate = materializedTemplate.template;
     } catch (error) {
       throw new Error(
         contextualWorkspaceCreateError(`Couldn't materialize the marketplace template '${templateName}'`, error)
@@ -4206,7 +4245,6 @@ async function createWorkspace(payload: HolabossCreateWorkspacePayload): Promise
   } else {
     throw new Error("Choose a local folder or a marketplace template first.");
   }
-  const resolvedTemplate = materializedTemplate.template;
   let created: WorkspaceResponsePayload;
   try {
     created = await requestRuntimeJson<WorkspaceResponsePayload>({
@@ -4226,20 +4264,27 @@ async function createWorkspace(payload: HolabossCreateWorkspacePayload): Promise
   const workspaceId = created.workspace.id;
 
   try {
-    await applyMaterializedTemplateToWorkspace(workspaceId, materializedTemplate.files);
-
     const workspaceDir = workspaceDirectoryPath(workspaceId);
+    const workspaceAgentsPath = path.join(workspaceDir, "AGENTS.md");
     const workspaceYamlPath = path.join(workspaceDir, "workspace.yaml");
-    let workspaceYamlExists = true;
-    try {
-      await fs.access(workspaceYamlPath);
-    } catch {
-      workspaceYamlExists = false;
-    }
-    if (!workspaceYamlExists) {
-      const current = getWorkspaceRecord(workspaceId);
-      if (current) {
-        await fs.writeFile(workspaceYamlPath, `${renderMinimalWorkspaceYaml(current, resolvedTemplate)}\n`, "utf-8");
+    if (templateMode === "empty") {
+      await fs.mkdir(path.join(workspaceDir, "skills"), { recursive: true });
+      await fs.writeFile(workspaceAgentsPath, "", "utf-8");
+      await fs.writeFile(workspaceYamlPath, `${renderEmptyWorkspaceYaml()}\n`, "utf-8");
+    } else if (materializedTemplate && resolvedTemplate) {
+      await applyMaterializedTemplateToWorkspace(workspaceId, materializedTemplate.files);
+
+      let workspaceYamlExists = true;
+      try {
+        await fs.access(workspaceYamlPath);
+      } catch {
+        workspaceYamlExists = false;
+      }
+      if (!workspaceYamlExists) {
+        const current = getWorkspaceRecord(workspaceId);
+        if (current) {
+          await fs.writeFile(workspaceYamlPath, `${renderMinimalWorkspaceYaml(current, resolvedTemplate)}\n`, "utf-8");
+        }
       }
     }
 
@@ -4307,6 +4352,13 @@ async function createWorkspace(payload: HolabossCreateWorkspacePayload): Promise
     }).catch(() => undefined);
     throw error;
   }
+}
+
+async function deleteWorkspace(workspaceId: string): Promise<WorkspaceResponsePayload> {
+  return requestRuntimeJson<WorkspaceResponsePayload>({
+    method: "DELETE",
+    path: `/api/v1/workspaces/${encodeURIComponent(workspaceId)}`
+  });
 }
 
 async function listRuntimeStates(workspaceId: string): Promise<SessionRuntimeStateListResponsePayload> {
@@ -5391,11 +5443,13 @@ function createAuthPopupHtml() {
     <title>Account</title>
     <style>
       * { box-sizing: border-box; }
+      html,
       body {
         margin: 0;
-        min-height: 100vh;
+        height: 100vh;
         background: transparent;
         color: var(--popup-text);
+        overflow: hidden;
       }
       @keyframes auth-popup-enter {
         from {
@@ -5408,8 +5462,8 @@ function createAuthPopupHtml() {
         }
       }
       .panel {
-        margin: ${AUTH_POPUP_HOVER_BRIDGE_PX}px 8px 8px;
-        height: calc(100vh - ${AUTH_POPUP_HOVER_BRIDGE_PX + 8}px);
+        margin: ${AUTH_POPUP_MARGIN_PX}px;
+        height: calc(100vh - ${AUTH_POPUP_MARGIN_PX * 2}px);
         border-radius: 26px;
         display: flex;
         flex-direction: column;
@@ -5487,6 +5541,7 @@ function createAuthPopupHtml() {
         color: var(--popup-text);
       }
       .content {
+        flex: 1 1 auto;
         min-height: 0;
         display: grid;
         gap: 12px;
@@ -5829,7 +5884,6 @@ function createAuthPopupHtml() {
       };
 
       const closeAndScheduleNothing = () => {
-        void window.authPopup.cancelClose();
         void window.authPopup.close();
       };
 
@@ -5867,20 +5921,8 @@ function createAuthPopupHtml() {
         }
       };
 
-      document.body.addEventListener("pointerenter", () => {
-        void window.authPopup.cancelClose();
-      });
-      document.body.addEventListener("pointerleave", () => {
-        void window.authPopup.scheduleClose();
-      });
       els.panel?.addEventListener("animationend", () => {
         document.body.classList.remove("popup-opening");
-      });
-      els.panel?.addEventListener("pointerenter", () => {
-        void window.authPopup.cancelClose();
-      });
-      els.panel?.addEventListener("pointerleave", () => {
-        void window.authPopup.scheduleClose();
       });
 
       els.signIn.addEventListener("click", async () => {
@@ -5972,7 +6014,6 @@ function createAuthPopupHtml() {
       });
 
       window.authPopup.onOpened(() => {
-        void window.authPopup.cancelClose();
         restartOpenAnimation();
       });
 
@@ -6622,6 +6663,7 @@ function ensureAuthPopupWindow() {
     width: AUTH_POPUP_WIDTH,
     height: AUTH_POPUP_HEIGHT,
     parent: mainWindow,
+    acceptFirstMouse: true,
     frame: false,
     resizable: false,
     movable: false,
@@ -6708,7 +6750,7 @@ function showAuthPopup(anchorBounds: BrowserAnchorBoundsPayload) {
       contentBounds.x + contentBounds.width - AUTH_POPUP_WIDTH - 8
     )
   );
-  const y = Math.round(contentBounds.y + anchorBounds.y + anchorBounds.height - AUTH_POPUP_HOVER_BRIDGE_PX);
+  const y = Math.round(contentBounds.y + anchorBounds.y + anchorBounds.height);
 
   popup.setBounds({
     x,
@@ -6719,9 +6761,19 @@ function showAuthPopup(anchorBounds: BrowserAnchorBoundsPayload) {
   if (popup.isVisible()) {
     return;
   }
-  popup.showInactive();
+  popup.show();
+  popup.focus();
   notifyAuthPopupOpened(popup);
   emitPendingAuthState();
+}
+
+function toggleAuthPopup(anchorBounds: BrowserAnchorBoundsPayload) {
+  if (authPopupWindow && !authPopupWindow.isDestroyed() && authPopupWindow.isVisible()) {
+    hideAuthPopup();
+    return;
+  }
+
+  showAuthPopup(anchorBounds);
 }
 
 function ensureDownloadsPopupWindow() {
@@ -7606,7 +7658,7 @@ app.whenReady().then(async () => {
     showAuthPopup(anchorBounds);
   });
   handleTrustedIpc("auth:togglePopup", ["main"], (_event, anchorBounds: BrowserAnchorBoundsPayload) => {
-    showAuthPopup(anchorBounds);
+    toggleAuthPopup(anchorBounds);
   });
   handleTrustedIpc("auth:scheduleClosePopup", ["main", "auth-popup"], (_event, delayMs?: number) => {
     scheduleAuthPopupHide(typeof delayMs === "number" ? delayMs : AUTH_POPUP_CLOSE_DELAY_MS);
@@ -7713,6 +7765,7 @@ app.whenReady().then(async () => {
   handleTrustedIpc("workspace:listOutputs", ["main"], async (_event, workspaceId: string) => listOutputs(workspaceId));
   handleTrustedIpc("workspace:getWorkspaceRoot", ["main"], async (_event, workspaceId: string) => workspaceDirectoryPath(workspaceId));
   handleTrustedIpc("workspace:createWorkspace", ["main"], async (_event, payload: HolabossCreateWorkspacePayload) => createWorkspace(payload));
+  handleTrustedIpc("workspace:deleteWorkspace", ["main"], async (_event, workspaceId: string) => deleteWorkspace(workspaceId));
   handleTrustedIpc("workspace:listCronjobs", ["main"], async (_event, workspaceId: string, enabledOnly?: boolean) =>
     listCronjobs(workspaceId, enabledOnly)
   );

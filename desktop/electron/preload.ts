@@ -535,6 +535,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
     getWorkspaceRoot: (workspaceId: string) => ipcRenderer.invoke("workspace:getWorkspaceRoot", workspaceId) as Promise<string>,
     createWorkspace: (payload: HolabossCreateWorkspacePayload) =>
       ipcRenderer.invoke("workspace:createWorkspace", payload) as Promise<WorkspaceResponsePayload>,
+    deleteWorkspace: (workspaceId: string) =>
+      ipcRenderer.invoke("workspace:deleteWorkspace", workspaceId) as Promise<WorkspaceResponsePayload>,
     listCronjobs: (workspaceId: string, enabledOnly?: boolean) =>
       ipcRenderer.invoke("workspace:listCronjobs", workspaceId, enabledOnly) as Promise<CronjobListResponsePayload>,
     createCronjob: (payload: CronjobCreatePayload) =>

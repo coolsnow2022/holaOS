@@ -486,7 +486,9 @@ declare global {
 
   interface HolabossCreateWorkspacePayload {
     holaboss_user_id: string;
+    harness?: string | null;
     name: string;
+    template_mode?: "template" | "empty" | null;
     template_root_path?: string | null;
     template_name?: string | null;
     template_ref?: string | null;
@@ -596,6 +598,7 @@ declare global {
       listOutputs: (workspaceId: string) => Promise<WorkspaceOutputListResponsePayload>;
       getWorkspaceRoot: (workspaceId: string) => Promise<string>;
       createWorkspace: (payload: HolabossCreateWorkspacePayload) => Promise<WorkspaceResponsePayload>;
+      deleteWorkspace: (workspaceId: string) => Promise<WorkspaceResponsePayload>;
       listCronjobs: (workspaceId: string, enabledOnly?: boolean) => Promise<CronjobListResponsePayload>;
       createCronjob: (payload: CronjobCreatePayload) => Promise<CronjobRecordPayload>;
       updateCronjob: (jobId: string, payload: CronjobUpdatePayload) => Promise<CronjobRecordPayload>;

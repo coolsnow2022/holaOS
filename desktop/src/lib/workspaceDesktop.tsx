@@ -12,8 +12,30 @@ import { useWorkspaceSelection } from "@/lib/workspaceSelection";
 
 const ONBOARDING_ACTIVE_STATUSES = new Set(["pending", "awaiting_confirmation", "in_progress"]);
 const LOCAL_OSS_TEMPLATE_USER_ID = "local-oss";
-type TemplateSourceMode = "local" | "marketplace";
+const DEFAULT_WORKSPACE_HARNESS: WorkspaceHarnessId = "opencode";
+type TemplateSourceMode = "local" | "marketplace" | "empty";
 type LifecycleStepState = "pending" | "current" | "done" | "error";
+
+export interface WorkspaceHarnessOption {
+  id: "opencode" | "pi";
+  label: string;
+  description: string;
+}
+
+type WorkspaceHarnessId = WorkspaceHarnessOption["id"];
+
+const WORKSPACE_HARNESS_OPTIONS: WorkspaceHarnessOption[] = [
+  {
+    id: "opencode",
+    label: "OpenCode",
+    description: "Default harness with backend bootstrapping and structured output support."
+  },
+  {
+    id: "pi",
+    label: "Pi",
+    description: "Lean harness path without backend bootstrapping."
+  }
+];
 
 export interface DesktopLifecycleStep {
   id: "signed_in" | "runtime_provisioned" | "sandbox_assigned" | "desktop_browser_ready" | "workspace_ready";
@@ -34,6 +56,9 @@ interface WorkspaceDesktopContextValue {
   refreshInstalledApps: () => Promise<void>;
   templateSourceMode: TemplateSourceMode;
   setTemplateSourceMode: (value: TemplateSourceMode) => void;
+  createHarnessOptions: WorkspaceHarnessOption[];
+  selectedCreateHarness: WorkspaceHarnessId;
+  setSelectedCreateHarness: (value: string) => void;
   selectedTemplateFolder: TemplateFolderSelectionPayload | null;
   marketplaceTemplates: TemplateMetadataPayload[];
   selectedMarketplaceTemplate: TemplateMetadataPayload | null;
@@ -44,6 +69,7 @@ interface WorkspaceDesktopContextValue {
   isLoadingBootstrap: boolean;
   isRefreshing: boolean;
   isCreatingWorkspace: boolean;
+  deletingWorkspaceId: string | null;
   isLoadingMarketplaceTemplates: boolean;
   canUseMarketplaceTemplates: boolean;
   marketplaceTemplatesError: string;
@@ -60,6 +86,7 @@ interface WorkspaceDesktopContextValue {
   refreshWorkspaceData: () => Promise<void>;
   chooseTemplateFolder: () => Promise<void>;
   createWorkspace: () => Promise<void>;
+  deleteWorkspace: (workspaceId: string) => Promise<void>;
 }
 
 const WorkspaceDesktopContext = createContext<WorkspaceDesktopContextValue | null>(null);
@@ -75,6 +102,10 @@ function sessionUserId(session: AuthSession | null): string {
   }
 
   return typeof maybeUser.id === "string" ? maybeUser.id : "";
+}
+
+function normalizeWorkspaceHarness(value: string | null | undefined): WorkspaceHarnessId {
+  return value?.trim().toLowerCase() === "pi" ? "pi" : "opencode";
 }
 
 function normalizeErrorMessage(error: unknown) {
@@ -122,6 +153,7 @@ export function WorkspaceDesktopProvider({ children }: { children: ReactNode }) 
   const [hasHydratedWorkspaceList, setHasHydratedWorkspaceList] = useState(false);
   const [installedApps, setInstalledApps] = useState<WorkspaceInstalledAppDefinition[]>([]);
   const [templateSourceMode, setTemplateSourceModeState] = useState<TemplateSourceMode>("local");
+  const [selectedCreateHarness, setSelectedCreateHarnessState] = useState<WorkspaceHarnessId>(DEFAULT_WORKSPACE_HARNESS);
   const [selectedTemplateFolder, setSelectedTemplateFolder] = useState<TemplateFolderSelectionPayload | null>(null);
   const [marketplaceTemplates, setMarketplaceTemplates] = useState<TemplateMetadataPayload[]>([]);
   const [selectedMarketplaceTemplateName, setSelectedMarketplaceTemplateName] = useState("");
@@ -129,6 +161,7 @@ export function WorkspaceDesktopProvider({ children }: { children: ReactNode }) 
   const [isLoadingBootstrap, setIsLoadingBootstrap] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isCreatingWorkspace, setIsCreatingWorkspace] = useState(false);
+  const [deletingWorkspaceId, setDeletingWorkspaceId] = useState<string | null>(null);
   const [isLoadingMarketplaceTemplates, setIsLoadingMarketplaceTemplates] = useState(false);
   const [marketplaceTemplatesError, setMarketplaceTemplatesError] = useState("");
   const [workspaceErrorMessage, setWorkspaceErrorMessage] = useState("");
@@ -155,6 +188,11 @@ export function WorkspaceDesktopProvider({ children }: { children: ReactNode }) 
   function setTemplateSourceMode(value: TemplateSourceMode) {
     setWorkspaceErrorMessage("");
     setTemplateSourceModeState(value);
+  }
+
+  function setSelectedCreateHarness(value: string) {
+    setWorkspaceErrorMessage("");
+    setSelectedCreateHarnessState(normalizeWorkspaceHarness(value));
   }
 
   function selectMarketplaceTemplate(templateName: string) {
@@ -307,8 +345,17 @@ export function WorkspaceDesktopProvider({ children }: { children: ReactNode }) 
         }
         response = await window.electronAPI.workspace.createWorkspace({
           holaboss_user_id: resolvedUserId,
+          harness: selectedCreateHarness,
           name: trimmedWorkspaceName,
+          template_mode: "template",
           template_name: selectedMarketplaceTemplate.name
+        });
+      } else if (templateSourceMode === "empty") {
+        response = await window.electronAPI.workspace.createWorkspace({
+          holaboss_user_id: resolvedUserId || LOCAL_OSS_TEMPLATE_USER_ID,
+          harness: selectedCreateHarness,
+          name: trimmedWorkspaceName,
+          template_mode: "empty"
         });
       } else {
         if (!selectedTemplateFolder?.rootPath) {
@@ -316,7 +363,9 @@ export function WorkspaceDesktopProvider({ children }: { children: ReactNode }) 
         }
         response = await window.electronAPI.workspace.createWorkspace({
           holaboss_user_id: resolvedUserId || LOCAL_OSS_TEMPLATE_USER_ID,
+          harness: selectedCreateHarness,
           name: trimmedWorkspaceName,
+          template_mode: "template",
           template_root_path: selectedTemplateFolder.rootPath
         });
       }
@@ -327,6 +376,24 @@ export function WorkspaceDesktopProvider({ children }: { children: ReactNode }) 
       setWorkspaceErrorMessage(normalizeErrorMessage(error));
     } finally {
       setIsCreatingWorkspace(false);
+    }
+  }
+
+  async function deleteWorkspace(workspaceId: string) {
+    const trimmedWorkspaceId = workspaceId.trim();
+    if (!trimmedWorkspaceId) {
+      throw new Error("workspaceId is required");
+    }
+    setDeletingWorkspaceId(trimmedWorkspaceId);
+    setWorkspaceErrorMessage("");
+    try {
+      await window.electronAPI.workspace.deleteWorkspace(trimmedWorkspaceId);
+      await loadWorkspaceData(true);
+    } catch (error) {
+      setWorkspaceErrorMessage(normalizeErrorMessage(error));
+      throw error;
+    } finally {
+      setDeletingWorkspaceId((current) => (current === trimmedWorkspaceId ? null : current));
     }
   }
 
@@ -660,6 +727,9 @@ export function WorkspaceDesktopProvider({ children }: { children: ReactNode }) 
       refreshInstalledApps,
       templateSourceMode,
       setTemplateSourceMode,
+      createHarnessOptions: WORKSPACE_HARNESS_OPTIONS,
+      selectedCreateHarness,
+      setSelectedCreateHarness,
       selectedTemplateFolder,
       marketplaceTemplates,
       selectedMarketplaceTemplate,
@@ -670,6 +740,7 @@ export function WorkspaceDesktopProvider({ children }: { children: ReactNode }) 
       isLoadingBootstrap,
       isRefreshing,
       isCreatingWorkspace,
+      deletingWorkspaceId,
       isLoadingMarketplaceTemplates,
       canUseMarketplaceTemplates,
       marketplaceTemplatesError,
@@ -682,7 +753,8 @@ export function WorkspaceDesktopProvider({ children }: { children: ReactNode }) 
       sessionTargetId,
       refreshWorkspaceData,
       chooseTemplateFolder,
-      createWorkspace
+      createWorkspace,
+      deleteWorkspace
     }),
     [
       runtimeConfig,
@@ -695,6 +767,7 @@ export function WorkspaceDesktopProvider({ children }: { children: ReactNode }) 
       isLoadingInstalledApps,
       refreshInstalledApps,
       templateSourceMode,
+      selectedCreateHarness,
       selectedTemplateFolder,
       marketplaceTemplates,
       selectedMarketplaceTemplate,
@@ -703,6 +776,7 @@ export function WorkspaceDesktopProvider({ children }: { children: ReactNode }) 
       isLoadingBootstrap,
       isRefreshing,
       isCreatingWorkspace,
+      deletingWorkspaceId,
       isLoadingMarketplaceTemplates,
       canUseMarketplaceTemplates,
       marketplaceTemplatesError,
