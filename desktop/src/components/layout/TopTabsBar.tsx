@@ -1,25 +1,13 @@
 import { FormEvent, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
-import { Search, User2, Loader2, Plus, ChevronDown, FolderKanban, Globe, Trash2 } from "lucide-react";
+import { Search, User2, Loader2, Plus, ChevronDown, FolderKanban, Trash2 } from "lucide-react";
 import { useWorkspaceDesktop } from "@/lib/workspaceDesktop";
 import { useWorkspaceSelection } from "@/lib/workspaceSelection";
 
 interface TopTabsBarProps {
-  agentMode?: boolean;
-  hasWorkspaces?: boolean;
   integratedTitleBar?: boolean;
-  onOpenBrowserWorkbench?: () => void;
-  activeWorkbenchTab?: "browser" | "files" | null;
-  workbenchOpen?: boolean;
 }
 
-export function TopTabsBar({
-  agentMode = true,
-  hasWorkspaces = true,
-  integratedTitleBar = false,
-  onOpenBrowserWorkbench,
-  activeWorkbenchTab,
-  workbenchOpen
-}: TopTabsBarProps) {
+export function TopTabsBar({ integratedTitleBar = false }: TopTabsBarProps) {
   const userButtonRef = useRef<HTMLButtonElement | null>(null);
   const workspaceSwitcherRef = useRef<HTMLDivElement | null>(null);
   const [workspaceSwitcherOpen, setWorkspaceSwitcherOpen] = useState(false);
@@ -169,12 +157,12 @@ export function TopTabsBar({
       }
     >
       <div
-        className={`grid min-w-0 items-center gap-2 sm:gap-3 lg:h-full lg:grid-cols-[minmax(320px,520px)_minmax(0,1fr)_auto] ${
+        className={`relative z-10 grid min-w-0 items-center gap-2 sm:gap-3 lg:h-full lg:grid-cols-[minmax(320px,520px)_minmax(0,1fr)_auto] ${
           integratedTitleBar ? "pl-[86px]" : ""
         }`}
       >
         <div className="flex min-w-0 items-center gap-2">
-          <div ref={workspaceSwitcherRef} className="relative min-w-[220px] max-w-full">
+          <div ref={workspaceSwitcherRef} className={`${integratedTitleBar ? "window-no-drag " : ""}relative min-w-[220px] max-w-full`}>
             <button
               type="button"
               onClick={() => {
@@ -233,11 +221,6 @@ export function TopTabsBar({
                               className="min-w-0 flex-1 px-1 text-left disabled:cursor-not-allowed"
                             >
                               <div className="truncate text-[12px] font-medium">{workspace.name}</div>
-                              <div className="mt-1 flex flex-wrap gap-2 text-[10px] uppercase tracking-[0.14em] text-text-dim/72">
-                                <span>{workspace.status}</span>
-                                {workspace.harness ? <span>{workspace.harness}</span> : null}
-                                {workspace.onboarding_status ? <span>onboarding {workspace.onboarding_status}</span> : null}
-                              </div>
                             </button>
                             <button
                               type="button"
@@ -424,22 +407,7 @@ export function TopTabsBar({
 
         <div className="hidden lg:block" />
 
-        <div className="flex items-center justify-self-end gap-2">
-          {agentMode && hasWorkspaces ? (
-            <button
-              type="button"
-              onClick={onOpenBrowserWorkbench}
-              className={`inline-flex h-11 items-center justify-center gap-2 rounded-[18px] border px-3.5 text-[12px] transition-all duration-200 active:scale-95 ${
-                workbenchOpen && activeWorkbenchTab === "browser"
-                  ? "border-neon-green/45 bg-neon-green/10 text-neon-green"
-                  : "border-panel-border/45 text-text-muted hover:border-neon-green/35 hover:text-text-main"
-              }`}
-            >
-              <Globe size={14} />
-              <span>Browser</span>
-            </button>
-          ) : null}
-
+        <div className={`${integratedTitleBar ? "window-no-drag " : ""}flex items-center justify-self-end gap-2`}>
           <button
             ref={userButtonRef}
             type="button"
@@ -453,7 +421,7 @@ export function TopTabsBar({
       </div>
 
       {workspaceErrorMessage ? (
-        <div className="theme-chat-system-bubble mt-2 rounded-[14px] border px-3 py-2 text-[11px] leading-6">
+        <div className={`${integratedTitleBar ? "window-no-drag " : ""}theme-chat-system-bubble mt-2 rounded-[14px] border px-3 py-2 text-[11px] leading-6`}>
           {workspaceErrorMessage}
         </div>
       ) : null}

@@ -1,4 +1,4 @@
-import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Download, Globe, Loader2, MoreHorizontal, Plus, RefreshCcw, Star, X } from "lucide-react";
 import { IconButton } from "@/components/ui/IconButton";
 import { PaneCard } from "@/components/ui/PaneCard";
@@ -39,8 +39,15 @@ function normalizeUrl(rawInput: string) {
   return `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`;
 }
 
-export function BrowserPane() {
+export function BrowserPane({
+  suspendNativeView = false,
+  layoutSyncKey = ""
+}: {
+  suspendNativeView?: boolean;
+  layoutSyncKey?: string;
+}) {
   const { selectedWorkspaceId } = useWorkspaceSelection();
+  const [paneWidth, setPaneWidth] = useState(0);
   const [browserState, setBrowserState] = useState<BrowserTabListPayload>(INITIAL_STATE);
   const [inputValue, setInputValue] = useState("");
   const [bookmarks, setBookmarks] = useState<BrowserBookmarkPayload[]>([]);
@@ -48,6 +55,7 @@ export function BrowserPane() {
   const [historyEntries, setHistoryEntries] = useState<BrowserHistoryEntryPayload[]>([]);
   const [addressFocused, setAddressFocused] = useState(false);
   const [highlightedSuggestionIndex, setHighlightedSuggestionIndex] = useState(-1);
+  const paneRef = useRef<HTMLDivElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const downloadsButtonRef = useRef<HTMLButtonElement | null>(null);
   const moreButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -59,6 +67,27 @@ export function BrowserPane() {
     () => browserState.tabs.find((tab) => tab.id === browserState.activeTabId) ?? browserState.tabs[0] ?? EMPTY_BROWSER_STATE,
     [browserState]
   );
+  const isCompactPane = paneWidth > 0 && paneWidth <= 320;
+  const isNarrowPane = paneWidth > 0 && paneWidth <= 240;
+  const showBookmarkStrip = bookmarks.length > 0 && !isCompactPane;
+
+  useLayoutEffect(() => {
+    const pane = paneRef.current;
+    if (!pane) {
+      return;
+    }
+
+    const syncPaneWidth = () => {
+      setPaneWidth(Math.round(pane.getBoundingClientRect().width));
+    };
+
+    syncPaneWidth();
+    const observer = new ResizeObserver(syncPaneWidth);
+    observer.observe(pane);
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -159,9 +188,14 @@ export function BrowserPane() {
     });
   }, [activeTab.id]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const viewport = viewportRef.current;
     if (!viewport) {
+      return;
+    }
+
+    if (suspendNativeView) {
+      void window.electronAPI.browser.setBounds({ x: 0, y: 0, width: 0, height: 0 });
       return;
     }
 
@@ -196,7 +230,7 @@ export function BrowserPane() {
       window.cancelAnimationFrame(rafId);
       void window.electronAPI.browser.setBounds({ x: 0, y: 0, width: 0, height: 0 });
     };
-  }, []);
+  }, [layoutSyncKey, suspendNativeView]);
 
   const navigateTo = (rawInput: string) => {
     const nextUrl = normalizeUrl(rawInput);
@@ -394,7 +428,7 @@ export function BrowserPane() {
 
   return (
     <PaneCard title="" className="shadow-glow">
-      <div className="flex h-full min-h-0 flex-col">
+      <div ref={paneRef} className="flex h-full min-h-0 flex-col">
         <div className="shrink-0 border-b border-neon-green/20 px-2 py-1.5">
           <div className="mb-1.5 flex items-center gap-1.5 overflow-x-auto pb-0.5">
             {browserState.tabs.map((tab) => {
@@ -417,7 +451,7 @@ export function BrowserPane() {
                     title={tab.title}
                   >
                     <Globe size={12} className="shrink-0" />
-                    <span className="truncate text-[10px] font-semibold tracking-wide">{tab.title || "New Tab"}</span>
+                    {!isNarrowPane ? <span className="truncate text-[10px] font-semibold tracking-wide">{tab.title || "New Tab"}</span> : null}
                     {tab.loading ? <Loader2 size={11} className="shrink-0 animate-spin" /> : null}
                   </button>
                   <button
@@ -442,112 +476,118 @@ export function BrowserPane() {
             </button>
           </div>
 
-          <div className="mb-1 flex min-w-0 items-center gap-1">
-            <IconButton
-              icon={<ChevronLeft size={13} />}
-              label="Back"
-              onClick={() => void window.electronAPI.browser.back()}
-              disabled={!activeTab.canGoBack}
-              className="h-7 w-7"
-            />
-            <IconButton
-              icon={<ChevronRight size={13} />}
-              label="Forward"
-              onClick={() => void window.electronAPI.browser.forward()}
-              disabled={!activeTab.canGoForward}
-              className="h-7 w-7"
-            />
-            <IconButton
-              icon={<RefreshCcw size={13} />}
-              label="Refresh"
-              onClick={() => void window.electronAPI.browser.reload()}
-              disabled={!activeTab.initialized}
-              className="h-7 w-7"
-            />
-
-            <form className="ml-1.5 flex min-w-0 flex-1 items-center gap-1.5" onSubmit={onSubmit}>
-              <div ref={addressFieldRef} className="relative flex min-w-0 flex-1">
-                <div className="glass-field flex min-w-0 flex-1 items-center gap-1.5 rounded-[var(--theme-radius-control)] px-2.5 py-1.5">
-                <Globe size={12} className="text-neon-green/85" />
-                <input
-                  ref={addressInputRef}
-                  value={inputValue}
-                  onChange={(event) => setInputValue(event.target.value)}
-                  onFocus={(event) => {
-                    event.currentTarget.select();
-                    setAddressFocused(true);
-                  }}
-                  onBlur={() => window.setTimeout(() => setAddressFocused(false), 120)}
-                  onKeyDown={onAddressKeyDown}
-                  className="embedded-input w-full bg-transparent text-[11px] text-text-main/90 outline-none placeholder:text-text-muted/40"
-                  placeholder="Enter URL or search"
+          <div className={`mb-1 flex min-w-0 ${isCompactPane ? "flex-col gap-1.5" : "items-center gap-1"}`}>
+            <div className={`flex min-w-0 ${isCompactPane ? "w-full items-center justify-between gap-1" : "items-center gap-1"}`}>
+              <div className="flex min-w-0 items-center gap-1">
+                <IconButton
+                  icon={<ChevronLeft size={13} />}
+                  label="Back"
+                  onClick={() => void window.electronAPI.browser.back()}
+                  disabled={!activeTab.canGoBack}
+                  className="h-7 w-7"
                 />
-                <button
-                  type="button"
-                  onClick={onToggleBookmark}
-                  className={[
-                    "grid h-6 w-6 place-items-center rounded-[var(--theme-radius-pill)] border transition",
-                    isBookmarked
-                      ? "border-neon-green/60 bg-neon-green/18 text-neon-green"
-                      : "border-transparent bg-transparent text-text-muted/65 hover:border-neon-green/35 hover:bg-black/20 hover:text-neon-green"
-                  ].join(" ")}
-                  aria-label={isBookmarked ? "Remove bookmark" : "Add bookmark"}
-                  title={isBookmarked ? "Remove bookmark" : "Bookmark this tab"}
-                  disabled={!activeTab.url}
-                >
-                  <Star size={13} fill={isBookmarked ? "currentColor" : "none"} />
-                </button>
-                </div>
+                <IconButton
+                  icon={<ChevronRight size={13} />}
+                  label="Forward"
+                  onClick={() => void window.electronAPI.browser.forward()}
+                  disabled={!activeTab.canGoForward}
+                  className="h-7 w-7"
+                />
+                <IconButton
+                  icon={<RefreshCcw size={13} />}
+                  label="Refresh"
+                  onClick={() => void window.electronAPI.browser.reload()}
+                  disabled={!activeTab.initialized}
+                  className="h-7 w-7"
+                />
               </div>
-            </form>
 
-            <div className="relative ml-auto flex shrink-0 items-center gap-1">
-              {hasVisibleDownloads ? (
+              <div className={`relative flex shrink-0 items-center gap-1 ${isCompactPane ? "" : "ml-auto"}`}>
+                {hasVisibleDownloads ? (
+                  <button
+                    ref={downloadsButtonRef}
+                    type="button"
+                    className={[
+                      "theme-subtle-surface relative grid h-7 w-7 place-items-center rounded-[var(--theme-radius-control)] border transition-all duration-200",
+                      "border-panel-border/60 text-text-muted/85 hover:border-neon-green/45 hover:text-neon-green"
+                    ].join(" ")}
+                    aria-label="Downloads"
+                    title="Downloads"
+                    onClick={onToggleDownloadsPopup}
+                  >
+                    <Download size={14} />
+                    {activeDownloadCount > 0 ? (
+                      <span className="absolute -right-1 -top-1 min-w-[16px] rounded-full border border-neon-green/55 bg-neon-green/90 px-1 text-[9px] font-bold leading-4 text-black">
+                        {activeDownloadCount}
+                      </span>
+                    ) : null}
+                  </button>
+                ) : null}
+
                 <button
-                  ref={downloadsButtonRef}
+                  ref={moreButtonRef}
                   type="button"
                   className={[
                     "theme-subtle-surface relative grid h-7 w-7 place-items-center rounded-[var(--theme-radius-control)] border transition-all duration-200",
                     "border-panel-border/60 text-text-muted/85 hover:border-neon-green/45 hover:text-neon-green"
                   ].join(" ")}
-                  aria-label="Downloads"
-                  title="Downloads"
-                  onClick={onToggleDownloadsPopup}
+                  aria-label="More browser options"
+                  title="More"
+                  onClick={() => {
+                    const bounds = getButtonBounds(moreButtonRef.current);
+                    if (!bounds) {
+                      return;
+                    }
+
+                    void window.electronAPI.browser.toggleOverflowPopup(bounds);
+                  }}
                 >
-                  <Download size={14} />
-                  {activeDownloadCount > 0 ? (
-                    <span className="absolute -right-1 -top-1 min-w-[16px] rounded-full border border-neon-green/55 bg-neon-green/90 px-1 text-[9px] font-bold leading-4 text-black">
-                      {activeDownloadCount}
-                    </span>
-                  ) : null}
+                  <MoreHorizontal size={14} />
                 </button>
-              ) : null}
-
-              <button
-                ref={moreButtonRef}
-                type="button"
-                className={[
-                  "theme-subtle-surface relative grid h-7 w-7 place-items-center rounded-[var(--theme-radius-control)] border transition-all duration-200",
-                  "border-panel-border/60 text-text-muted/85 hover:border-neon-green/45 hover:text-neon-green"
-                ].join(" ")}
-                aria-label="More browser options"
-                title="More"
-                onClick={() => {
-                  const bounds = getButtonBounds(moreButtonRef.current);
-                  if (!bounds) {
-                    return;
-                  }
-
-                  void window.electronAPI.browser.toggleOverflowPopup(bounds);
-                }}
-              >
-                <MoreHorizontal size={14} />
-              </button>
+              </div>
             </div>
+
+            <form className={`flex min-w-0 ${isCompactPane ? "w-full" : "ml-1.5 flex-1 items-center gap-1.5"}`} onSubmit={onSubmit}>
+              <div ref={addressFieldRef} className="relative flex min-w-0 flex-1">
+                <div className="glass-field flex min-w-0 flex-1 items-center gap-1.5 rounded-[var(--theme-radius-control)] px-2.5 py-1.5">
+                  <Globe size={12} className="shrink-0 text-neon-green/85" />
+                  <input
+                    ref={addressInputRef}
+                    value={inputValue}
+                    onChange={(event) => setInputValue(event.target.value)}
+                    onFocus={(event) => {
+                      event.currentTarget.select();
+                      setAddressFocused(true);
+                    }}
+                    onBlur={() => window.setTimeout(() => setAddressFocused(false), 120)}
+                    onKeyDown={onAddressKeyDown}
+                    className="embedded-input w-full min-w-0 bg-transparent text-[11px] text-text-main/90 outline-none placeholder:text-text-muted/40"
+                    placeholder={isNarrowPane ? "Search" : "Enter URL or search"}
+                  />
+                  {!isNarrowPane ? (
+                    <button
+                      type="button"
+                      onClick={onToggleBookmark}
+                      className={[
+                        "grid h-6 w-6 shrink-0 place-items-center rounded-[var(--theme-radius-pill)] border transition",
+                        isBookmarked
+                          ? "border-neon-green/60 bg-neon-green/18 text-neon-green"
+                          : "border-transparent bg-transparent text-text-muted/65 hover:border-neon-green/35 hover:bg-black/20 hover:text-neon-green"
+                      ].join(" ")}
+                      aria-label={isBookmarked ? "Remove bookmark" : "Add bookmark"}
+                      title={isBookmarked ? "Remove bookmark" : "Bookmark this tab"}
+                      disabled={!activeTab.url}
+                    >
+                      <Star size={13} fill={isBookmarked ? "currentColor" : "none"} />
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            </form>
           </div>
 
-          {bookmarks.length > 0 ? (
-          <div className="flex min-h-6 items-center gap-0.5 overflow-x-auto px-1.5 py-0.5">
+          {showBookmarkStrip ? (
+            <div className="flex min-h-6 items-center gap-0.5 overflow-x-auto px-1.5 py-0.5">
               {bookmarks.slice(0, 12).map((bookmark) => (
                 <button
                   type="button"
@@ -571,11 +611,13 @@ export function BrowserPane() {
               ))}
             </div>
           ) : null}
-
         </div>
 
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-black/20 p-2">
-          <div ref={viewportRef} className="relative min-h-0 flex-1 overflow-hidden rounded-[calc(var(--theme-radius-card)+0.2rem)]">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-px pb-px">
+          <div
+            ref={viewportRef}
+            className="relative min-h-0 flex-1 overflow-hidden rounded-b-[calc(var(--theme-radius-card)-2px)] bg-[var(--theme-shell-bg)]"
+          >
             {!activeTab.initialized ? (
               <div className="absolute inset-0 grid place-items-center bg-obsidian-soft/95 p-4 text-center">
                 <div className="max-w-sm rounded-xl border border-neon-green/35 bg-black/60 p-4 text-xs text-text-main/80">

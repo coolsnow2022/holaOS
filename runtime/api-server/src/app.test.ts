@@ -127,6 +127,52 @@ test("healthz returns ok", async () => {
   store.close();
 });
 
+test("healthz still returns ok when remote bridge is enabled without product auth", async () => {
+  const root = makeTempDir("hb-runtime-api-bridge-disabled-");
+  const store = new RuntimeStateStore({
+    dbPath: path.join(root, "runtime.db"),
+    workspaceRoot: path.join(root, "workspace")
+  });
+  const previousBridge = process.env.PROACTIVE_ENABLE_REMOTE_BRIDGE;
+  const previousAuth = process.env.HOLABOSS_SANDBOX_AUTH_TOKEN;
+  const previousConfigPath = process.env.HOLABOSS_RUNTIME_CONFIG_PATH;
+
+  process.env.PROACTIVE_ENABLE_REMOTE_BRIDGE = "1";
+  delete process.env.HOLABOSS_SANDBOX_AUTH_TOKEN;
+  delete process.env.HOLABOSS_RUNTIME_CONFIG_PATH;
+
+  try {
+    const app = buildRuntimeApiServer({
+      store,
+      queueWorker: null,
+      cronWorker: null
+    });
+
+    const response = await app.inject({ method: "GET", url: "/healthz" });
+
+    assert.equal(response.statusCode, 200);
+    assert.deepEqual(response.json(), { ok: true });
+    await app.close();
+  } finally {
+    if (previousBridge === undefined) {
+      delete process.env.PROACTIVE_ENABLE_REMOTE_BRIDGE;
+    } else {
+      process.env.PROACTIVE_ENABLE_REMOTE_BRIDGE = previousBridge;
+    }
+    if (previousAuth === undefined) {
+      delete process.env.HOLABOSS_SANDBOX_AUTH_TOKEN;
+    } else {
+      process.env.HOLABOSS_SANDBOX_AUTH_TOKEN = previousAuth;
+    }
+    if (previousConfigPath === undefined) {
+      delete process.env.HOLABOSS_RUNTIME_CONFIG_PATH;
+    } else {
+      process.env.HOLABOSS_RUNTIME_CONFIG_PATH = previousConfigPath;
+    }
+    store.close();
+  }
+});
+
 test("browser capability routes proxy to the browser tool service", async () => {
   const root = makeTempDir("hb-runtime-api-browser-capability-");
   const store = new RuntimeStateStore({

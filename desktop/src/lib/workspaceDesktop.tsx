@@ -296,17 +296,21 @@ export function WorkspaceDesktopProvider({ children }: { children: ReactNode }) 
     };
   }, []);
 
-  async function loadWorkspaceData(preserveSelection = true) {
+  async function loadWorkspaceData(options: { preserveSelection?: boolean; allowEmpty?: boolean } = {}) {
+    const { preserveSelection = true, allowEmpty = false } = options;
     const workspaceResponse = await window.electronAPI.workspace.listWorkspaces();
     const nextWorkspaces = workspaceResponse.items;
-    setWorkspaces(nextWorkspaces);
+    const shouldKeepPreviousWorkspaces = !allowEmpty && nextWorkspaces.length === 0 && workspaces.length > 0;
+    const resolvedWorkspaces = shouldKeepPreviousWorkspaces ? workspaces : nextWorkspaces;
+
+    setWorkspaces(resolvedWorkspaces);
 
     setSelectedWorkspaceId((current) => {
       const stored = preserveSelection ? current : "";
-      if (stored && nextWorkspaces.some((workspace) => workspace.id === stored)) {
+      if (stored && resolvedWorkspaces.some((workspace) => workspace.id === stored)) {
         return stored;
       }
-      return nextWorkspaces[0]?.id ?? "";
+      return resolvedWorkspaces[0]?.id ?? "";
     });
   }
 
@@ -321,14 +325,14 @@ export function WorkspaceDesktopProvider({ children }: { children: ReactNode }) 
       setRuntimeConfig(nextRuntimeConfig);
       setRuntimeStatus(nextRuntimeStatus);
       if (nextRuntimeStatus.status === "running") {
-        await loadWorkspaceData(true);
+        await loadWorkspaceData({ preserveSelection: true });
       } else if (nextRuntimeStatus.status === "error" && nextRuntimeStatus.lastError.trim()) {
         setWorkspaceErrorMessage(nextRuntimeStatus.lastError.trim());
       }
     } catch (error) {
       setWorkspaceErrorMessage(normalizeErrorMessage(error));
     } finally {
-      setHasHydratedWorkspaceList(true);
+      setHasHydratedWorkspaceList((current) => current || workspaces.length > 0);
       setIsRefreshing(false);
     }
   }
@@ -376,7 +380,7 @@ export function WorkspaceDesktopProvider({ children }: { children: ReactNode }) 
         });
       }
       setNewWorkspaceName("");
-      await loadWorkspaceData(false);
+      await loadWorkspaceData({ preserveSelection: false, allowEmpty: true });
       setSelectedWorkspaceId(response.workspace.id);
     } catch (error) {
       setWorkspaceErrorMessage(normalizeErrorMessage(error));
@@ -394,7 +398,7 @@ export function WorkspaceDesktopProvider({ children }: { children: ReactNode }) 
     setWorkspaceErrorMessage("");
     try {
       await window.electronAPI.workspace.deleteWorkspace(trimmedWorkspaceId);
-      await loadWorkspaceData(true);
+      await loadWorkspaceData({ preserveSelection: true, allowEmpty: true });
     } catch (error) {
       setWorkspaceErrorMessage(normalizeErrorMessage(error));
       throw error;
@@ -475,7 +479,7 @@ export function WorkspaceDesktopProvider({ children }: { children: ReactNode }) 
 
     if (!runtimeReadyForWorkspaceData) {
       setIsRefreshing(false);
-      setHasHydratedWorkspaceList(true);
+      setHasHydratedWorkspaceList((current) => current || workspaces.length > 0);
       if (runtimeStatus?.status === "error" && runtimeStatus.lastError.trim()) {
         setWorkspaceErrorMessage((current) => current || runtimeStatus.lastError.trim());
       }
@@ -488,7 +492,7 @@ export function WorkspaceDesktopProvider({ children }: { children: ReactNode }) 
       setIsRefreshing(true);
       setWorkspaceErrorMessage("");
       try {
-        await loadWorkspaceData(true);
+        await loadWorkspaceData({ preserveSelection: true });
       } catch (error) {
         if (!cancelled) {
           setWorkspaceErrorMessage(normalizeErrorMessage(error));
@@ -505,7 +509,7 @@ export function WorkspaceDesktopProvider({ children }: { children: ReactNode }) 
     return () => {
       cancelled = true;
     };
-  }, [isLoadingBootstrap, resolvedUserId, runtimeReadyForWorkspaceData, runtimeStatus?.lastError, runtimeStatus?.status]);
+  }, [isLoadingBootstrap, resolvedUserId, runtimeReadyForWorkspaceData, runtimeStatus?.lastError, runtimeStatus?.status, workspaces.length]);
 
   useEffect(() => {
     let cancelled = false;

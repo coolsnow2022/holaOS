@@ -1417,6 +1417,23 @@ interface SessionHistoryResponsePayload {
   raw: unknown | null;
 }
 
+interface SessionOutputEventPayload {
+  id: number;
+  workspace_id: string;
+  session_id: string;
+  input_id: string;
+  sequence: number;
+  event_type: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
+interface SessionOutputEventListResponsePayload {
+  items: SessionOutputEventPayload[];
+  count: number;
+  last_event_id: number;
+}
+
 interface EnqueueSessionInputResponsePayload {
   input_id: string;
   session_id: string;
@@ -1478,6 +1495,26 @@ interface WorkspaceOutputRecordPayload {
 
 interface WorkspaceOutputListResponsePayload {
   items: WorkspaceOutputRecordPayload[];
+}
+
+interface WorkspaceSkillRecordPayload {
+  skill_id: string;
+  source_dir: string;
+  skill_file_path: string;
+  title: string;
+  summary: string;
+  enabled: boolean;
+  modified_at: string;
+}
+
+interface WorkspaceSkillListResponsePayload {
+  workspace_id: string;
+  workspace_root: string;
+  skills_path: string;
+  configured_path: string;
+  enabled_skill_ids: string[];
+  missing_enabled_skill_ids: string[];
+  skills: WorkspaceSkillRecordPayload[];
 }
 
 interface HolabossCreateWorkspacePayload {
@@ -4225,6 +4262,273 @@ async function listOutputs(workspaceId: string): Promise<WorkspaceOutputListResp
   });
 }
 
+function normalizeWorkspaceSkillId(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const skillId = value.trim();
+  if (!skillId || skillId === "." || skillId === "..") {
+    return null;
+  }
+  if (skillId.includes("/") || skillId.includes("\\") || skillId.includes("\0")) {
+    return null;
+  }
+  return skillId;
+}
+
+function sanitizeYamlScalar(rawValue: string): string {
+  const trimmed = rawValue.replace(/\s+#.*$/, "").trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
+
+function parseInlineYamlStringArray(rawValue: string): string[] {
+  const trimmed = rawValue.trim();
+  if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) {
+    return [];
+  }
+  return trimmed
+    .slice(1, -1)
+    .split(",")
+    .map((item) => normalizeWorkspaceSkillId(sanitizeYamlScalar(item)))
+    .filter((item): item is string => Boolean(item));
+}
+
+function parseWorkspaceSkillsConfig(workspaceYaml: string | null): {
+  relativePath: string;
+  enabledSkillIds: string[];
+} {
+  const result = {
+    relativePath: "skills",
+    enabledSkillIds: [] as string[]
+  };
+  if (!workspaceYaml) {
+    return result;
+  }
+
+  const stack: Array<{ key: string; indent: number }> = [];
+  let resolvedPrimaryPath = false;
+
+  for (const rawLine of workspaceYaml.replace(/\t/g, "  ").split(/\r?\n/)) {
+    const trimmed = rawLine.trim();
+    if (!trimmed || trimmed.startsWith("#")) {
+      continue;
+    }
+
+    const indent = rawLine.match(/^\s*/)?.[0].length ?? 0;
+    while (stack.length && indent <= stack[stack.length - 1].indent) {
+      stack.pop();
+    }
+
+    if (trimmed.startsWith("- ")) {
+      const currentScope = stack.map((entry) => entry.key).join(".");
+      if (currentScope === "skills.enabled") {
+        const skillId = normalizeWorkspaceSkillId(sanitizeYamlScalar(trimmed.slice(2)));
+        if (skillId && !result.enabledSkillIds.includes(skillId)) {
+          result.enabledSkillIds.push(skillId);
+        }
+      }
+      continue;
+    }
+
+    const separatorIndex = trimmed.indexOf(":");
+    if (separatorIndex < 0) {
+      continue;
+    }
+
+    const key = trimmed.slice(0, separatorIndex).trim();
+    const rawValue = trimmed.slice(separatorIndex + 1).trim();
+    const scope = [...stack.map((entry) => entry.key), key].join(".");
+
+    if (scope === "skills.path" && rawValue) {
+      const nextPath = sanitizeYamlScalar(rawValue);
+      if (nextPath) {
+        result.relativePath = nextPath;
+        resolvedPrimaryPath = true;
+      }
+    } else if (scope === "agents.proactive.skills_path" && rawValue && !resolvedPrimaryPath) {
+      const legacyPath = sanitizeYamlScalar(rawValue);
+      if (legacyPath) {
+        result.relativePath = legacyPath;
+      }
+    } else if (scope === "skills.enabled" && rawValue) {
+      for (const skillId of parseInlineYamlStringArray(rawValue)) {
+        if (!result.enabledSkillIds.includes(skillId)) {
+          result.enabledSkillIds.push(skillId);
+        }
+      }
+    }
+
+    if (!rawValue) {
+      stack.push({ key, indent });
+    }
+  }
+
+  return result;
+}
+
+function humanizeSkillId(skillId: string): string {
+  return skillId
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function extractSkillMetadata(markdown: string, skillId: string): { title: string; summary: string } {
+  const normalized = markdown.replace(/\r\n/g, "\n").trim();
+  let remaining = normalized;
+  let summary = "";
+
+  const frontmatterMatch = normalized.match(/^---\n([\s\S]*?)\n---\s*/);
+  if (frontmatterMatch) {
+    const descriptionMatch = frontmatterMatch[1].match(/^description:\s*(.+)$/m);
+    if (descriptionMatch) {
+      summary = sanitizeYamlScalar(descriptionMatch[1]);
+    }
+    remaining = normalized.slice(frontmatterMatch[0].length).trim();
+  }
+
+  const titleMatch = remaining.match(/^#\s+(.+)$/m);
+  const title = titleMatch?.[1]?.trim() || humanizeSkillId(skillId) || skillId;
+
+  if (!summary) {
+    const lines = remaining.split("\n");
+    const paragraphLines: string[] = [];
+    let collecting = false;
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line) {
+        if (collecting) {
+          break;
+        }
+        continue;
+      }
+      if (!collecting && (line.startsWith("#") || line === "---")) {
+        continue;
+      }
+      if (line.startsWith("```")) {
+        if (collecting) {
+          break;
+        }
+        continue;
+      }
+      collecting = true;
+      paragraphLines.push(line);
+    }
+    summary = paragraphLines.join(" ").trim();
+  }
+
+  return {
+    title,
+    summary: summary || "No description provided."
+  };
+}
+
+async function listWorkspaceSkills(workspaceId: string): Promise<WorkspaceSkillListResponsePayload> {
+  const workspaceRoot = workspaceDirectoryPath(workspaceId);
+  const workspaceYamlPath = path.join(workspaceRoot, "workspace.yaml");
+  let workspaceYamlContent: string | null = null;
+  try {
+    workspaceYamlContent = await fs.readFile(workspaceYamlPath, "utf-8");
+  } catch {
+    workspaceYamlContent = null;
+  }
+
+  const config = parseWorkspaceSkillsConfig(workspaceYamlContent);
+  const configuredPath = config.relativePath || "skills";
+  const relativePath = path.normalize(configuredPath);
+  const skillsPath = path.resolve(workspaceRoot, relativePath);
+  const relativeToWorkspace = path.relative(path.resolve(workspaceRoot), skillsPath);
+  if (path.isAbsolute(relativePath) || relativeToWorkspace.startsWith("..") || path.isAbsolute(relativeToWorkspace)) {
+    return {
+      workspace_id: workspaceId,
+      workspace_root: workspaceRoot,
+      skills_path: skillsPath,
+      configured_path: configuredPath,
+      enabled_skill_ids: config.enabledSkillIds,
+      missing_enabled_skill_ids: [...config.enabledSkillIds],
+      skills: []
+    };
+  }
+
+  let directoryEntries;
+  try {
+    directoryEntries = await fs.readdir(skillsPath, { withFileTypes: true });
+  } catch {
+    return {
+      workspace_id: workspaceId,
+      workspace_root: workspaceRoot,
+      skills_path: skillsPath,
+      configured_path: configuredPath,
+      enabled_skill_ids: config.enabledSkillIds,
+      missing_enabled_skill_ids: [...config.enabledSkillIds],
+      skills: []
+    };
+  }
+
+  const skills = (
+    await Promise.all(
+      directoryEntries
+        .filter((entry) => entry.isDirectory())
+        .map(async (entry) => {
+          const skillId = normalizeWorkspaceSkillId(entry.name);
+          if (!skillId) {
+            return null;
+          }
+          const sourceDir = path.join(skillsPath, entry.name);
+          const skillFilePath = path.join(sourceDir, "SKILL.md");
+          try {
+            const [content, stats] = await Promise.all([fs.readFile(skillFilePath, "utf-8"), fs.stat(skillFilePath)]);
+            const metadata = extractSkillMetadata(content, skillId);
+            return {
+              skill_id: skillId,
+              source_dir: sourceDir,
+              skill_file_path: skillFilePath,
+              title: metadata.title,
+              summary: metadata.summary,
+              enabled: config.enabledSkillIds.length === 0 ? true : config.enabledSkillIds.includes(skillId),
+              modified_at: stats.mtime.toISOString()
+            } satisfies WorkspaceSkillRecordPayload;
+          } catch {
+            return null;
+          }
+        })
+    )
+  ).filter((skill): skill is WorkspaceSkillRecordPayload => Boolean(skill));
+
+  const configuredOrder = new Map(config.enabledSkillIds.map((skillId, index) => [skillId, index] as const));
+  skills.sort((left, right) => {
+    const leftRank = configuredOrder.get(left.skill_id) ?? Number.MAX_SAFE_INTEGER;
+    const rightRank = configuredOrder.get(right.skill_id) ?? Number.MAX_SAFE_INTEGER;
+    if (leftRank !== rightRank) {
+      return leftRank - rightRank;
+    }
+    if (left.enabled !== right.enabled) {
+      return left.enabled ? -1 : 1;
+    }
+    return left.title.localeCompare(right.title, undefined, { sensitivity: "base" });
+  });
+
+  const discoveredIds = new Set(skills.map((skill) => skill.skill_id));
+  const missingEnabledSkillIds = config.enabledSkillIds.filter((skillId) => !discoveredIds.has(skillId));
+
+  return {
+    workspace_id: workspaceId,
+    workspace_root: workspaceRoot,
+    skills_path: skillsPath,
+    configured_path: configuredPath,
+    enabled_skill_ids: config.enabledSkillIds,
+    missing_enabled_skill_ids: missingEnabledSkillIds,
+    skills
+  };
+}
+
 function renderMinimalWorkspaceYaml(workspace: WorkspaceRecordPayload, template: ResolvedTemplatePayload) {
   const createdAt = workspace.created_at ?? utcNowIso();
   const templateCommit = template.effective_commit ? `  commit: ${JSON.stringify(template.effective_commit)}\n` : "";
@@ -4468,6 +4772,17 @@ async function getSessionHistory(sessionId: string, workspaceId: string): Promis
     }
     throw error;
   }
+}
+
+async function getSessionOutputEvents(sessionId: string): Promise<SessionOutputEventListResponsePayload> {
+  return requestRuntimeJson<SessionOutputEventListResponsePayload>({
+    method: "GET",
+    path: `/api/v1/agent-sessions/${encodeURIComponent(sessionId)}/outputs/events`,
+    params: {
+      include_history: true,
+      after_event_id: 0
+    }
+  });
 }
 
 function normalizeErrorMessage(error: unknown) {
@@ -6212,6 +6527,10 @@ function applyBoundsToTab(workspaceId: string, tabId: string) {
   tab.view.setBounds(browserBounds);
 }
 
+function hasVisibleBrowserBounds() {
+  return browserBounds.width > 0 && browserBounds.height > 0;
+}
+
 function emitBrowserState(workspaceId?: string | null) {
   if (!mainWindow || mainWindow.isDestroyed()) {
     return;
@@ -6290,7 +6609,8 @@ function updateAttachedBrowserView() {
     return;
   }
   const activeTab = getActiveBrowserTab(activeBrowserWorkspaceId);
-  if (!activeTab) {
+  if (!activeTab || !hasVisibleBrowserBounds()) {
+    mainWindow.setBrowserView(null);
     return;
   }
   mainWindow.setBrowserView(activeTab.view);
@@ -6761,10 +7081,11 @@ function setBrowserBounds(bounds: BrowserBoundsPayload) {
   };
 
   const workspace = activeBrowserWorkspace();
-  if (!workspace || !workspace.activeTabId) {
+  if (!workspace || !workspace.activeTabId || !hasVisibleBrowserBounds()) {
+    mainWindow?.setBrowserView(null);
     return;
   }
-  applyBoundsToTab(workspace.workspaceId, workspace.activeTabId);
+  updateAttachedBrowserView();
 }
 
 function createDownloadsPopupHtml() {
@@ -6983,7 +7304,11 @@ function ensureAuthPopupWindow() {
   });
 
   authPopupWindow.on("blur", () => {
-    hideAuthPopup();
+    scheduleAuthPopupHide();
+  });
+
+  authPopupWindow.on("focus", () => {
+    clearScheduledAuthPopupHide();
   });
 
   authPopupWindow.on("closed", () => {
@@ -8066,6 +8391,7 @@ app.whenReady().then(async () => {
     stopInstalledApp(workspaceId, appId)
   );
   handleTrustedIpc("workspace:listOutputs", ["main"], async (_event, workspaceId: string) => listOutputs(workspaceId));
+  handleTrustedIpc("workspace:listSkills", ["main"], async (_event, workspaceId: string) => listWorkspaceSkills(workspaceId));
   handleTrustedIpc("workspace:getWorkspaceRoot", ["main"], async (_event, workspaceId: string) => workspaceDirectoryPath(workspaceId));
   handleTrustedIpc("workspace:createWorkspace", ["main"], async (_event, payload: HolabossCreateWorkspacePayload) => createWorkspace(payload));
   handleTrustedIpc("workspace:deleteWorkspace", ["main"], async (_event, workspaceId: string) => deleteWorkspace(workspaceId));
@@ -8087,6 +8413,9 @@ app.whenReady().then(async () => {
   handleTrustedIpc("workspace:listRuntimeStates", ["main"], async (_event, workspaceId: string) => listRuntimeStates(workspaceId));
   handleTrustedIpc("workspace:getSessionHistory", ["main"], async (_event, payload: { sessionId: string; workspaceId: string }) =>
     getSessionHistory(payload.sessionId, payload.workspaceId)
+  );
+  handleTrustedIpc("workspace:getSessionOutputEvents", ["main"], async (_event, payload: { sessionId: string }) =>
+    getSessionOutputEvents(payload.sessionId)
   );
   handleTrustedIpc("workspace:stageSessionAttachments", ["main"], async (_event, payload: StageSessionAttachmentsPayload) =>
     stageSessionAttachments(payload)

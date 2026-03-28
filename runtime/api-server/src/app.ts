@@ -119,6 +119,32 @@ function resolveCronWorker(
   return new RuntimeCronWorker({ store, logger: app.log, queueWorker });
 }
 
+function resolveBridgeWorker(
+  options: BuildRuntimeApiServerOptions,
+  app: FastifyInstance,
+  store: RuntimeStateStore,
+  memoryService: MemoryServiceLike
+): BridgeWorkerLike | null {
+  if (options.bridgeWorker !== undefined) {
+    return options.bridgeWorker;
+  }
+  if (!tsBridgeWorkerEnabled()) {
+    return null;
+  }
+  try {
+    return new RuntimeRemoteBridgeWorker({ logger: app.log, store, memoryService });
+  } catch (error) {
+    app.log.warn(
+      {
+        event: "runtime.proactive_bridge.disabled",
+        reason: error instanceof Error ? error.message : String(error)
+      },
+      "Remote proactive bridge disabled during startup"
+    );
+    return null;
+  }
+}
+
 type StringMap = Record<string, unknown>;
 
 interface SessionInputAttachmentPayload {
@@ -1033,12 +1059,7 @@ export function buildRuntimeApiServer(options: BuildRuntimeApiServerOptions = {}
   const runnerExecutor = options.runnerExecutor ?? new NativeRunnerExecutor();
   const queueWorker = resolveQueueWorker(options, app, store);
   const cronWorker = resolveCronWorker(options, app, store, queueWorker);
-  const bridgeWorker =
-    options.bridgeWorker === undefined
-      ? tsBridgeWorkerEnabled()
-        ? new RuntimeRemoteBridgeWorker({ logger: app.log, store, memoryService })
-        : null
-      : options.bridgeWorker;
+  const bridgeWorker = resolveBridgeWorker(options, app, store, memoryService);
 
   app.addHook("onClose", async () => {
     await bridgeWorker?.close();
