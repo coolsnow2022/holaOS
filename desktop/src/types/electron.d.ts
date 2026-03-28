@@ -459,6 +459,23 @@ declare global {
     ports: Record<string, number>;
   }
 
+  interface WorkspaceLifecycleBlockingAppPayload {
+    app_id: string;
+    status: string;
+    error: string | null;
+  }
+
+  interface WorkspaceLifecyclePayload {
+    workspace: WorkspaceRecordPayload;
+    applications: InstalledWorkspaceAppPayload[];
+    ready: boolean;
+    reason: string | null;
+    phase: string;
+    phase_label: string;
+    phase_detail: string | null;
+    blocking_apps: WorkspaceLifecycleBlockingAppPayload[];
+  }
+
   interface WorkspaceOutputRecordPayload {
     id: string;
     workspace_id: string;
@@ -630,6 +647,8 @@ declare global {
       listMarketplaceTemplates: () => Promise<TemplateListResponsePayload>;
       pickTemplateFolder: () => Promise<TemplateFolderSelectionPayload>;
       listWorkspaces: () => Promise<WorkspaceListResponsePayload>;
+      getWorkspaceLifecycle: (workspaceId: string) => Promise<WorkspaceLifecyclePayload>;
+      activateWorkspace: (workspaceId: string) => Promise<WorkspaceLifecyclePayload>;
       listInstalledApps: (workspaceId: string) => Promise<InstalledWorkspaceAppListResponsePayload>;
       startInstalledApp: (workspaceId: string, appId: string) => Promise<WorkspaceAppLifecycleActionPayload>;
       stopInstalledApp: (workspaceId: string, appId: string) => Promise<WorkspaceAppLifecycleActionPayload>;

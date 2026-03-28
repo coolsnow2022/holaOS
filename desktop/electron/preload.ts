@@ -431,11 +431,49 @@ interface HolabossSessionStreamHandlePayload {
   streamId: string;
 }
 
+type WorkspaceAppBuildStatus =
+  | "unknown"
+  | "pending"
+  | "building"
+  | "completed"
+  | "failed"
+  | "running"
+  | "stopped";
+
+interface InstalledWorkspaceAppPayload {
+  app_id: string;
+  config_path: string;
+  lifecycle: Record<string, string> | null;
+  build_status: WorkspaceAppBuildStatus;
+}
+
+interface InstalledWorkspaceAppListResponsePayload {
+  apps: InstalledWorkspaceAppPayload[];
+  count: number;
+}
+
 interface WorkspaceAppLifecycleActionPayload {
   app_id: string;
   status: string;
   detail: string;
   ports: Record<string, number>;
+}
+
+interface WorkspaceLifecycleBlockingAppPayload {
+  app_id: string;
+  status: string;
+  error: string | null;
+}
+
+interface WorkspaceLifecyclePayload {
+  workspace: WorkspaceRecordPayload;
+  applications: InstalledWorkspaceAppPayload[];
+  ready: boolean;
+  reason: string | null;
+  phase: string;
+  phase_label: string;
+  phase_detail: string | null;
+  blocking_apps: WorkspaceLifecycleBlockingAppPayload[];
 }
 
 interface HolabossSessionStreamEventPayload {
@@ -542,6 +580,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
     pickTemplateFolder: () =>
       ipcRenderer.invoke("workspace:pickTemplateFolder") as Promise<TemplateFolderSelectionPayload>,
     listWorkspaces: () => ipcRenderer.invoke("workspace:listWorkspaces") as Promise<WorkspaceListResponsePayload>,
+    getWorkspaceLifecycle: (workspaceId: string) =>
+      ipcRenderer.invoke("workspace:getWorkspaceLifecycle", workspaceId) as Promise<WorkspaceLifecyclePayload>,
+    activateWorkspace: (workspaceId: string) =>
+      ipcRenderer.invoke("workspace:activateWorkspace", workspaceId) as Promise<WorkspaceLifecyclePayload>,
     listInstalledApps: (workspaceId: string) =>
       ipcRenderer.invoke("workspace:listInstalledApps", workspaceId) as Promise<InstalledWorkspaceAppListResponsePayload>,
     startInstalledApp: (workspaceId: string, appId: string) =>

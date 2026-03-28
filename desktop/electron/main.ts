@@ -1467,6 +1467,23 @@ interface InstalledWorkspaceAppListResponsePayload {
   count: number;
 }
 
+interface WorkspaceLifecycleBlockingAppPayload {
+  app_id: string;
+  status: string;
+  error: string | null;
+}
+
+interface WorkspaceLifecyclePayload {
+  workspace: WorkspaceRecordPayload;
+  applications: InstalledWorkspaceAppPayload[];
+  ready: boolean;
+  reason: string | null;
+  phase: string;
+  phase_label: string;
+  phase_detail: string | null;
+  blocking_apps: WorkspaceLifecycleBlockingAppPayload[];
+}
+
 interface WorkspaceAppLifecycleActionPayload {
   app_id: string;
   status: string;
@@ -4208,6 +4225,24 @@ function getWorkspaceRecord(workspaceId: string): WorkspaceRecordPayload | null 
 }
 
 async function listWorkspaces(): Promise<WorkspaceListResponsePayload> {
+  const holabossUserId = await controlPlaneWorkspaceUserId();
+  if (holabossUserId) {
+    return requestControlPlaneJson<WorkspaceListResponsePayload>({
+      service: "projects",
+      method: "GET",
+      path: "/api/v1/projects/workspaces",
+      params: {
+        holaboss_user_id: holabossUserId,
+        include_deleted: false,
+        limit: 100,
+        offset: 0
+      }
+    });
+  }
+  return listWorkspacesViaRuntime();
+}
+
+async function listWorkspacesViaRuntime(): Promise<WorkspaceListResponsePayload> {
   return requestRuntimeJson<WorkspaceListResponsePayload>({
     method: "GET",
     path: "/api/v1/workspaces",
@@ -4220,6 +4255,14 @@ async function listWorkspaces(): Promise<WorkspaceListResponsePayload> {
 }
 
 async function listInstalledApps(workspaceId: string): Promise<InstalledWorkspaceAppListResponsePayload> {
+  const lifecycle = await getWorkspaceLifecycle(workspaceId);
+  return {
+    apps: lifecycle.applications,
+    count: lifecycle.applications.length
+  };
+}
+
+async function listInstalledAppsViaRuntime(workspaceId: string): Promise<InstalledWorkspaceAppListResponsePayload> {
   return requestRuntimeJson<InstalledWorkspaceAppListResponsePayload>({
     method: "GET",
     path: "/api/v1/apps",
@@ -4230,6 +4273,27 @@ async function listInstalledApps(workspaceId: string): Promise<InstalledWorkspac
 }
 
 async function startInstalledApp(workspaceId: string, appId: string): Promise<WorkspaceAppLifecycleActionPayload> {
+  const holabossUserId = await controlPlaneWorkspaceUserId();
+  if (holabossUserId) {
+    const response = await requestControlPlaneJson<{ app_id: string; status: string }>({
+      service: "projects",
+      method: "POST",
+      path: `/api/v1/projects/workspaces/${encodeURIComponent(workspaceId)}/applications/${encodeURIComponent(appId)}/start`,
+      payload: {
+        holaboss_user_id: holabossUserId
+      }
+    });
+    return {
+      app_id: response.app_id,
+      status: response.status,
+      detail: `${response.app_id} ${response.status}.`,
+      ports: {}
+    };
+  }
+  return startInstalledAppViaRuntime(workspaceId, appId);
+}
+
+async function startInstalledAppViaRuntime(workspaceId: string, appId: string): Promise<WorkspaceAppLifecycleActionPayload> {
   return requestRuntimeJson<WorkspaceAppLifecycleActionPayload>({
     method: "POST",
     path: `/api/v1/apps/${encodeURIComponent(appId)}/start`,
@@ -4241,6 +4305,27 @@ async function startInstalledApp(workspaceId: string, appId: string): Promise<Wo
 }
 
 async function stopInstalledApp(workspaceId: string, appId: string): Promise<WorkspaceAppLifecycleActionPayload> {
+  const holabossUserId = await controlPlaneWorkspaceUserId();
+  if (holabossUserId) {
+    const response = await requestControlPlaneJson<{ app_id: string; status: string }>({
+      service: "projects",
+      method: "POST",
+      path: `/api/v1/projects/workspaces/${encodeURIComponent(workspaceId)}/applications/${encodeURIComponent(appId)}/stop`,
+      payload: {
+        holaboss_user_id: holabossUserId
+      }
+    });
+    return {
+      app_id: response.app_id,
+      status: response.status,
+      detail: `${response.app_id} ${response.status}.`,
+      ports: {}
+    };
+  }
+  return stopInstalledAppViaRuntime(workspaceId, appId);
+}
+
+async function stopInstalledAppViaRuntime(workspaceId: string, appId: string): Promise<WorkspaceAppLifecycleActionPayload> {
   return requestRuntimeJson<WorkspaceAppLifecycleActionPayload>({
     method: "POST",
     path: `/api/v1/apps/${encodeURIComponent(appId)}/stop`,
@@ -4249,6 +4334,171 @@ async function stopInstalledApp(workspaceId: string, appId: string): Promise<Wor
     },
     timeoutMs: 30000
   });
+}
+
+async function controlPlaneWorkspaceUserId(): Promise<string | null> {
+  if (!controlPlaneApiKey()) {
+    return null;
+  }
+  const runtimeConfig = await readRuntimeConfigFile();
+  const runtimeUserId = (runtimeConfig.user_id || "").trim();
+  if (runtimeUserId && runtimeUserId !== LOCAL_OSS_TEMPLATE_USER_ID) {
+    return runtimeUserId;
+  }
+
+  const authenticatedUser = await getAuthenticatedUser().catch(() => null);
+  const authId = authenticatedUser ? authUserId(authenticatedUser) : "";
+  return authId.trim() || null;
+}
+
+function workspaceReadinessFromApps(apps: InstalledWorkspaceAppPayload[]) {
+  const blockingApps = apps
+    .filter((app) => (app.build_status || "").trim().toLowerCase() !== "running")
+    .map((app) => ({
+      app_id: app.app_id,
+      status: app.build_status,
+      error: null
+    }));
+
+  if (blockingApps.length === 0) {
+    return {
+      ready: true,
+      reason: null,
+      blocking_apps: []
+    };
+  }
+
+  const prefix = blockingApps.some((app) => app.status === "failed")
+    ? "Workspace apps failed to start"
+    : blockingApps.some((app) => app.status === "building" || app.status === "pending")
+      ? "Workspace apps are still building"
+      : "Workspace apps are still starting";
+  const details = blockingApps.map((app) => `${app.app_id} (${app.status})`).join(", ");
+  return {
+    ready: false,
+    reason: `${prefix}: ${details}.`,
+    blocking_apps: blockingApps
+  };
+}
+
+function workspaceLifecyclePhaseFromState(
+  workspace: WorkspaceRecordPayload,
+  readiness: ReturnType<typeof workspaceReadinessFromApps>
+) {
+  const reason = readiness.reason?.trim() || null;
+  const blockingStatuses = new Set(readiness.blocking_apps.map((app) => (app.status || "").trim().toLowerCase()));
+
+  if ((workspace.status || "").trim().toLowerCase() === "error") {
+    return {
+      phase: "error",
+      phase_label: "Workspace error",
+      phase_detail: workspace.error_message || reason || "Workspace provisioning failed."
+    };
+  }
+  if ((workspace.status || "").trim().toLowerCase() === "provisioning") {
+    return {
+      phase: "provisioning_workspace",
+      phase_label: "Configuring workspace",
+      phase_detail: "Preparing the local workspace files and settings."
+    };
+  }
+  if (readiness.ready) {
+    return {
+      phase: "ready",
+      phase_label: "Workspace ready",
+      phase_detail: null
+    };
+  }
+  if (blockingStatuses.has("failed")) {
+    return {
+      phase: "error",
+      phase_label: "Workspace error",
+      phase_detail: reason || workspace.error_message || "Workspace apps failed to start."
+    };
+  }
+  if (blockingStatuses.has("building") || blockingStatuses.has("pending")) {
+    return {
+      phase: "building_apps",
+      phase_label: "Building apps",
+      phase_detail: reason || "Building workspace apps."
+    };
+  }
+  if (readiness.blocking_apps.length > 0) {
+    return {
+      phase: "starting_apps",
+      phase_label: "Starting apps",
+      phase_detail: reason || "Starting workspace apps."
+    };
+  }
+  return {
+    phase: "preparing_workspace",
+    phase_label: "Preparing workspace",
+    phase_detail: reason || "Finalizing workspace startup."
+  };
+}
+
+async function getWorkspaceLifecycle(workspaceId: string): Promise<WorkspaceLifecyclePayload> {
+  const holabossUserId = await controlPlaneWorkspaceUserId();
+  if (holabossUserId) {
+    return requestControlPlaneJson<WorkspaceLifecyclePayload>({
+      service: "projects",
+      method: "GET",
+      path: `/api/v1/projects/workspaces/${encodeURIComponent(workspaceId)}/lifecycle`,
+      params: {
+        holaboss_user_id: holabossUserId
+      }
+    });
+  }
+  return getWorkspaceLifecycleViaRuntime(workspaceId);
+}
+
+async function activateWorkspace(workspaceId: string): Promise<WorkspaceLifecyclePayload> {
+  const holabossUserId = await controlPlaneWorkspaceUserId();
+  if (holabossUserId) {
+    return requestControlPlaneJson<WorkspaceLifecyclePayload>({
+      service: "projects",
+      method: "POST",
+      path: `/api/v1/projects/workspaces/${encodeURIComponent(workspaceId)}/activate`,
+      payload: {
+        holaboss_user_id: holabossUserId
+      }
+    });
+  }
+
+  const installedApps = await listInstalledAppsViaRuntime(workspaceId);
+  for (const app of installedApps.apps) {
+    const status = (app.build_status || "").trim().toLowerCase();
+    if (status === "running" || status === "building" || status === "pending") {
+      continue;
+    }
+    await startInstalledAppViaRuntime(workspaceId, app.app_id);
+  }
+  return getWorkspaceLifecycleViaRuntime(workspaceId);
+}
+
+async function getWorkspaceLifecycleViaRuntime(workspaceId: string): Promise<WorkspaceLifecyclePayload> {
+  const workspace =
+    getWorkspaceRecord(workspaceId) ??
+    (await listWorkspacesViaRuntime()).items.find((item) => item.id === workspaceId) ??
+    null;
+  if (!workspace) {
+    throw new Error(`Workspace ${workspaceId} not found.`);
+  }
+
+  const installedApps = await listInstalledAppsViaRuntime(workspaceId);
+  const readiness = workspaceReadinessFromApps(installedApps.apps);
+  const phaseState = workspaceLifecyclePhaseFromState(workspace, readiness);
+
+  return {
+    workspace,
+    applications: installedApps.apps,
+    ready: readiness.ready,
+    reason: readiness.reason,
+    phase: phaseState.phase,
+    phase_label: phaseState.phase_label,
+    phase_detail: phaseState.phase_detail,
+    blocking_apps: readiness.blocking_apps
+  };
 }
 
 async function listOutputs(workspaceId: string): Promise<WorkspaceOutputListResponsePayload> {
@@ -4578,6 +4828,23 @@ async function createWorkspace(payload: HolabossCreateWorkspacePayload): Promise
   const templateMode = requestedWorkspaceTemplateMode(payload);
   const templateRootPath = payload.template_root_path?.trim() || "";
   const templateName = payload.template_name?.trim() || "";
+  if (templateMode !== "empty" && !templateRootPath && templateName) {
+    const holabossUserId = (payload.holaboss_user_id || "").trim();
+    if (controlPlaneApiKey() && holabossUserId && holabossUserId !== LOCAL_OSS_TEMPLATE_USER_ID) {
+      return requestControlPlaneJson<WorkspaceResponsePayload>({
+        service: "projects",
+        method: "POST",
+        path: "/api/v1/projects/workspaces",
+        payload: {
+          holaboss_user_id: holabossUserId,
+          name: payload.name,
+          template_name: templateName,
+          template_ref: payload.template_ref,
+          template_commit: payload.template_commit
+        }
+      });
+    }
+  }
   let materializedTemplate: MaterializeTemplateResponsePayload | null = null;
   let resolvedTemplate: ResolvedTemplatePayload | null = null;
   if (templateMode === "empty") {
@@ -8383,6 +8650,12 @@ app.whenReady().then(async () => {
   handleTrustedIpc("workspace:listMarketplaceTemplates", ["main"], async () => listMarketplaceTemplates());
   handleTrustedIpc("workspace:pickTemplateFolder", ["main"], async () => pickTemplateFolder());
   handleTrustedIpc("workspace:listWorkspaces", ["main", "auth-popup"], async () => listWorkspaces());
+  handleTrustedIpc("workspace:getWorkspaceLifecycle", ["main"], async (_event, workspaceId: string) =>
+    getWorkspaceLifecycle(workspaceId)
+  );
+  handleTrustedIpc("workspace:activateWorkspace", ["main"], async (_event, workspaceId: string) =>
+    activateWorkspace(workspaceId)
+  );
   handleTrustedIpc("workspace:listInstalledApps", ["main"], async (_event, workspaceId: string) => listInstalledApps(workspaceId));
   handleTrustedIpc("workspace:startInstalledApp", ["main"], async (_event, workspaceId: string, appId: string) =>
     startInstalledApp(workspaceId, appId)

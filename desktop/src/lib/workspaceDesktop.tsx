@@ -53,6 +53,9 @@ interface WorkspaceDesktopContextValue {
   selectedWorkspace: WorkspaceRecordPayload | null;
   installedApps: WorkspaceInstalledAppDefinition[];
   isLoadingInstalledApps: boolean;
+  isActivatingWorkspace: boolean;
+  workspaceAppsReady: boolean;
+  workspaceBlockingReason: string;
   refreshInstalledApps: () => Promise<void>;
   templateSourceMode: TemplateSourceMode;
   setTemplateSourceMode: (value: TemplateSourceMode) => void;
@@ -166,6 +169,9 @@ export function WorkspaceDesktopProvider({ children }: { children: ReactNode }) 
   const [marketplaceTemplatesError, setMarketplaceTemplatesError] = useState("");
   const [workspaceErrorMessage, setWorkspaceErrorMessage] = useState("");
   const [isLoadingInstalledApps, setIsLoadingInstalledApps] = useState(false);
+  const [isActivatingWorkspace, setIsActivatingWorkspace] = useState(false);
+  const [workspaceAppsReady, setWorkspaceAppsReady] = useState(false);
+  const [workspaceBlockingReason, setWorkspaceBlockingReason] = useState("");
   const [recentAuthCompletedAt, setRecentAuthCompletedAt] = useState<number | null>(null);
 
   const isSignedIn = Boolean(sessionUserId(session));
@@ -201,19 +207,38 @@ export function WorkspaceDesktopProvider({ children }: { children: ReactNode }) 
     setSelectedMarketplaceTemplateName(templateName);
   }
 
+  function applyWorkspaceLifecycle(lifecycle: WorkspaceLifecyclePayload) {
+    setInstalledApps(hydrateInstalledWorkspaceApps(lifecycle.applications));
+    setWorkspaceAppsReady(lifecycle.ready);
+    setWorkspaceBlockingReason((lifecycle.phase_detail || lifecycle.reason || "").trim());
+    setWorkspaces((current) => {
+      const nextWorkspace = lifecycle.workspace;
+      const existingIndex = current.findIndex((workspace) => workspace.id === nextWorkspace.id);
+      if (existingIndex === -1) {
+        return [nextWorkspace, ...current];
+      }
+      const next = [...current];
+      next[existingIndex] = { ...next[existingIndex], ...nextWorkspace };
+      return next;
+    });
+  }
+
   async function refreshInstalledApps() {
     if (!selectedWorkspaceId) {
       setInstalledApps([]);
       setIsLoadingInstalledApps(false);
+      setWorkspaceAppsReady(false);
+      setWorkspaceBlockingReason("");
       return;
     }
 
     setIsLoadingInstalledApps(true);
     try {
-      const response = await window.electronAPI.workspace.listInstalledApps(selectedWorkspaceId);
-      setInstalledApps(hydrateInstalledWorkspaceApps(response.apps));
+      const response = await window.electronAPI.workspace.getWorkspaceLifecycle(selectedWorkspaceId);
+      applyWorkspaceLifecycle(response);
     } catch (error) {
       setInstalledApps([]);
+      setWorkspaceAppsReady(false);
       setWorkspaceErrorMessage((current) => current || normalizeErrorMessage(error));
     } finally {
       setIsLoadingInstalledApps(false);
@@ -545,31 +570,36 @@ export function WorkspaceDesktopProvider({ children }: { children: ReactNode }) 
     if (!selectedWorkspaceId || !runtimeReadyForWorkspaceData) {
       setInstalledApps([]);
       setIsLoadingInstalledApps(false);
+      setWorkspaceAppsReady(false);
+      setWorkspaceBlockingReason("");
       return;
     }
 
     let cancelled = false;
 
-    async function loadInstalledApps() {
+    async function activateSelectedWorkspace() {
       setIsLoadingInstalledApps(true);
+      setIsActivatingWorkspace(true);
       try {
-        const response = await window.electronAPI.workspace.listInstalledApps(selectedWorkspaceId);
+        const response = await window.electronAPI.workspace.activateWorkspace(selectedWorkspaceId);
         if (!cancelled) {
-          setInstalledApps(hydrateInstalledWorkspaceApps(response.apps));
+          applyWorkspaceLifecycle(response);
         }
       } catch (error) {
         if (!cancelled) {
           setInstalledApps([]);
+          setWorkspaceAppsReady(false);
           setWorkspaceErrorMessage((current) => current || normalizeErrorMessage(error));
         }
       } finally {
         if (!cancelled) {
           setIsLoadingInstalledApps(false);
+          setIsActivatingWorkspace(false);
         }
       }
     }
 
-    void loadInstalledApps();
+    void activateSelectedWorkspace();
     return () => {
       cancelled = true;
     };
@@ -583,10 +613,10 @@ export function WorkspaceDesktopProvider({ children }: { children: ReactNode }) 
     let cancelled = false;
     const timer = window.setInterval(() => {
       void window.electronAPI.workspace
-        .listInstalledApps(selectedWorkspaceId)
+        .getWorkspaceLifecycle(selectedWorkspaceId)
         .then((response) => {
           if (!cancelled) {
-            setInstalledApps(hydrateInstalledWorkspaceApps(response.apps));
+            applyWorkspaceLifecycle(response);
           }
         })
         .catch(() => undefined);
@@ -640,7 +670,7 @@ export function WorkspaceDesktopProvider({ children }: { children: ReactNode }) 
     const runtimeProvisioned = Boolean(runtimeConfig?.authTokenPresent);
     const sandboxAssigned = Boolean(runtimeConfig?.sandboxId?.trim());
     const desktopBrowserReady = Boolean(runtimeStatus?.desktopBrowserReady);
-    const workspaceReady = Boolean(selectedWorkspace && selectedWorkspace.status.trim().toLowerCase() === "active");
+    const workspaceReady = Boolean(selectedWorkspace && workspaceAppsReady);
     const runtimeFailed = runtimeStatus?.status === "error";
     const workspaceFailed = Boolean(selectedWorkspace && selectedWorkspace.status.trim().toLowerCase() === "error");
 
@@ -684,13 +714,13 @@ export function WorkspaceDesktopProvider({ children }: { children: ReactNode }) 
         detail: workspaceFailed
           ? selectedWorkspace?.error_message || "Workspace provisioning failed."
           : workspaceReady
-            ? `${selectedWorkspace?.name || "Workspace"} is active.`
+            ? `${selectedWorkspace?.name || "Workspace"} is active and apps are running.`
             : selectedWorkspace
-              ? `Current workspace status: ${selectedWorkspace.status}.`
+              ? workspaceBlockingReason || `Current workspace status: ${selectedWorkspace.status}.`
               : "Create or select a workspace to finish desktop routing."
       }
     ];
-  }, [isSignedIn, runtimeConfig, runtimeStatus, selectedWorkspace]);
+  }, [isSignedIn, runtimeConfig, runtimeStatus, selectedWorkspace, workspaceAppsReady, workspaceBlockingReason]);
 
   const setupStatus = useMemo(() => {
     if (!clientConfig && !runtimeConfig && !runtimeStatus) {
@@ -751,6 +781,9 @@ export function WorkspaceDesktopProvider({ children }: { children: ReactNode }) 
       selectedWorkspace,
       installedApps,
       isLoadingInstalledApps,
+      isActivatingWorkspace,
+      workspaceAppsReady,
+      workspaceBlockingReason,
       refreshInstalledApps,
       templateSourceMode,
       setTemplateSourceMode,
@@ -792,6 +825,9 @@ export function WorkspaceDesktopProvider({ children }: { children: ReactNode }) 
       selectedWorkspace,
       installedApps,
       isLoadingInstalledApps,
+      isActivatingWorkspace,
+      workspaceAppsReady,
+      workspaceBlockingReason,
       refreshInstalledApps,
       templateSourceMode,
       selectedCreateHarness,
@@ -813,7 +849,9 @@ export function WorkspaceDesktopProvider({ children }: { children: ReactNode }) 
       setupStatus,
       onboardingModeActive,
       sessionModeLabel,
-      sessionTargetId
+      sessionTargetId,
+      workspaceAppsReady,
+      workspaceBlockingReason
     ]
   );
 

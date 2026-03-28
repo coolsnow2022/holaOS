@@ -501,7 +501,11 @@ export function ChatPane({
   const {
     runtimeConfig,
     selectedWorkspace,
+    resolvedUserId,
     isLoadingBootstrap,
+    isActivatingWorkspace,
+    workspaceAppsReady,
+    workspaceBlockingReason,
     refreshWorkspaceData
   } = useWorkspaceDesktop();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -1393,6 +1397,14 @@ export function ChatPane({
       setChatErrorMessage("Create or select a workspace first.");
       return;
     }
+    if (!resolvedUserId) {
+      setChatErrorMessage("Sign in or set a runtime user id first.");
+      return;
+    }
+    if (!workspaceAppsReady) {
+      setChatErrorMessage(workspaceBlockingReason || "Workspace apps are still starting.");
+      return;
+    }
     const targetSessionId = preferredSessionId(selectedWorkspace, []) || activeSessionIdRef.current;
     if (!targetSessionId) {
       setChatErrorMessage("No active session found for this workspace.");
@@ -1663,11 +1675,19 @@ export function ChatPane({
       })),
     [pendingAttachments]
   );
+  const readinessMessage =
+    !selectedWorkspace || workspaceAppsReady
+      ? ""
+      : workspaceBlockingReason || (isActivatingWorkspace ? "Preparing workspace apps..." : "Workspace apps are still starting.");
   const composerDisabledReason = !selectedWorkspace
     ? "Select a workspace to start chatting."
+    : !resolvedUserId
+      ? "Sign in or set a runtime user id first."
     : isLoadingBootstrap || isLoadingHistory
       ? "Loading workspace context..."
-      : "";
+      : !workspaceAppsReady
+        ? readinessMessage || "Workspace apps are still starting."
+        : "";
   const composerDisabled = Boolean(composerDisabledReason);
   const isSignedIn = Boolean(sessionUserId(authSessionState.data));
   const holabossProxyModelsAvailable =
@@ -1886,11 +1906,12 @@ export function ChatPane({
                     </div>
                     <div className="mt-3 text-[13px] leading-7 text-text-muted/68">
                       {selectedWorkspace
-                        ? "Messages are queued into the local runtime workspace flow, then streamed back from the live session output feed."
+                        ? readinessMessage || "Messages are queued into the local runtime workspace flow, then streamed back from the live session output feed."
                         : "Pick a template, create a workspace, and then send the first instruction."}
                     </div>
                   </div>
                   <form onSubmit={onSubmit} className="mx-auto max-w-[760px]">
+                    {readinessMessage ? <div className="mb-3 text-[12px] text-text-muted/82">{readinessMessage}</div> : null}
                     <Composer
                       input={input}
                       attachments={pendingAttachmentItems}
@@ -1935,6 +1956,7 @@ export function ChatPane({
           {hasMessages ? (
             <div ref={composerBlockRef} className="shrink-0 px-4 pb-4 pt-3 sm:px-5 sm:pb-5">
               <form onSubmit={onSubmit} className="mx-auto max-w-[760px]">
+                {readinessMessage ? <div className="mb-3 text-[12px] text-text-muted/82">{readinessMessage}</div> : null}
                 <Composer
                   input={input}
                   attachments={pendingAttachmentItems}

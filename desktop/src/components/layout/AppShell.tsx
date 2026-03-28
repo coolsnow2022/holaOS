@@ -399,6 +399,17 @@ function FirstWorkspacePane() {
     void createWorkspace();
   };
 
+  const creatingViaMarketplaceSandbox =
+    templateSourceMode === "marketplace" && canUseMarketplaceTemplates;
+  const createTitle = creatingViaMarketplaceSandbox
+    ? "Launching sandbox..."
+    : "Preparing local workspace...";
+  const createDetail = creatingViaMarketplaceSandbox
+    ? "Holaboss is starting a fresh sandbox first. Workspace setup continues as soon as the sandbox is ready."
+    : "Holaboss is preparing the local runtime and importing your template.";
+  const createSteps = creatingViaMarketplaceSandbox
+    ? ["Launching sandbox", "Configuring workspace", "Opening desktop"]
+    : ["Preparing local runtime", "Importing template", "Opening workspace"];
   if (isCreatingWorkspace) {
     return (
       <section className="theme-shell relative flex h-full min-h-0 min-w-0 items-center justify-center overflow-hidden rounded-[var(--theme-radius-card)] border border-panel-border/45 px-6 py-10 shadow-card">
@@ -407,20 +418,20 @@ function FirstWorkspacePane() {
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full border border-neon-green/30 bg-neon-green/10 text-neon-green">
             <Loader2 size={22} className="animate-spin" />
           </div>
-          <h2 className="mt-5 text-[30px] font-semibold tracking-[-0.04em] text-text-main">Building your workspace...</h2>
+          <h2 className="mt-5 text-[30px] font-semibold tracking-[-0.04em] text-text-main">{createTitle}</h2>
           <p className="mt-3 text-[14px] leading-7 text-text-muted/84">
-            Holaboss is preparing your workspace and wiring the desktop surface around it.
+            {createDetail}
           </p>
           <div className="theme-control-surface mt-7 overflow-hidden rounded-full border border-panel-border/45 p-1">
             <div className="h-2 rounded-full bg-[linear-gradient(90deg,rgba(247,90,84,0.56),rgba(233,117,109,0.72),rgba(247,170,126,0.78))] animate-pulse" />
           </div>
           <div className="mt-4 flex items-center justify-center gap-2 text-[11px] uppercase tracking-[0.24em] text-text-dim/80">
             <span className="h-1.5 w-1.5 rounded-full bg-neon-green/70" />
-            <span>Provisioning runtime</span>
+            <span>{createSteps[0]}</span>
             <span className="h-1.5 w-1.5 rounded-full bg-neon-green/55" />
-            <span>Scaffolding workspace</span>
+            <span>{createSteps[1]}</span>
             <span className="h-1.5 w-1.5 rounded-full bg-neon-green/40" />
-            <span>Preparing desktop</span>
+            <span>{createSteps[2]}</span>
           </div>
         </div>
       </section>

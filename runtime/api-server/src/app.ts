@@ -80,6 +80,7 @@ import { buildAppSetupEnv } from "./app-setup-env.js";
 
 const DEFAULT_POLL_INTERVAL_MS = 50;
 const DEFAULT_BODY_LIMIT_BYTES = 10 * 1024 * 1024;
+const DEFAULT_APP_SETUP_TIMEOUT_MS = 900_000;
 const TERMINAL_EVENT_TYPES = new Set(["run_completed", "run_failed"]);
 export interface BuildRuntimeApiServerOptions {
   logger?: boolean;
@@ -226,6 +227,17 @@ function optionalInteger(value: unknown, defaultValue: number): number {
     }
   }
   return defaultValue;
+}
+
+function appSetupTimeoutMs(): number {
+  const rawValue = process.env.HB_APP_SETUP_TIMEOUT_MS ?? process.env.APP_SETUP_TIMEOUT_MS;
+  if (typeof rawValue === "string" && rawValue.trim().length > 0) {
+    const parsed = Number.parseInt(rawValue.trim(), 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  return DEFAULT_APP_SETUP_TIMEOUT_MS;
 }
 
 function optionalDict(value: unknown): Record<string, unknown> | undefined {
@@ -901,6 +913,31 @@ function resolvedAppBuildStatus(params: {
   return params.entry ? fallbackAppBuildStatus(params.entry) : "unknown";
 }
 
+function blockingWorkspaceApps(params: {
+  store: RuntimeStateStore;
+  workspaceId: string;
+}): Array<{ appId: string; status: string }> {
+  return listWorkspaceApplications(params.store.workspaceDir(params.workspaceId))
+    .map((entry) => {
+      const appId = typeof entry.app_id === "string" ? entry.app_id : "";
+      return {
+        appId,
+        status: appId ? resolvedAppBuildStatus({ ...params, appId, entry }) : "unknown"
+      };
+    })
+    .filter((entry) => entry.appId.length > 0 && entry.status !== "running");
+}
+
+function blockingWorkspaceAppsMessage(entries: Array<{ appId: string; status: string }>): string {
+  if (entries.some((entry) => entry.status === "failed")) {
+    return `workspace apps failed to start: ${entries.map((entry) => `${entry.appId} (${entry.status})`).join(", ")}`;
+  }
+  if (entries.some((entry) => entry.status === "building")) {
+    return `workspace apps are still building: ${entries.map((entry) => `${entry.appId} (${entry.status})`).join(", ")}`;
+  }
+  return `workspace apps are still starting: ${entries.map((entry) => `${entry.appId} (${entry.status})`).join(", ")}`;
+}
+
 async function runAppSetup(params: {
   store: RuntimeStateStore;
   workspaceDir: string;
@@ -914,6 +951,7 @@ async function runAppSetup(params: {
     appId: params.appId,
     status: "building"
   });
+  const setupTimeoutMs = appSetupTimeoutMs();
 
   try {
     const result = await new Promise<{ code: number | null; timedOut: boolean; stderr: string }>((resolve, reject) => {
@@ -932,7 +970,7 @@ async function runAppSetup(params: {
         settled = true;
         child.kill("SIGKILL");
         resolve({ code: null, timedOut: true, stderr });
-      }, 300_000);
+      }, setupTimeoutMs);
 
       child.stderr?.on("data", (chunk: Buffer | string) => {
         if (stderr.length >= 2000) {
@@ -960,11 +998,12 @@ async function runAppSetup(params: {
     });
 
     if (result.timedOut) {
+      const timeoutSeconds = Math.max(1, Math.round(setupTimeoutMs / 1000));
       params.store.upsertAppBuild({
         workspaceId: params.workspaceId,
         appId: params.appId,
         status: "failed",
-        error: "setup timed out after 300s"
+        error: `setup timed out after ${timeoutSeconds}s`
       });
       return;
     }
@@ -2059,6 +2098,10 @@ export function buildRuntimeApiServer(options: BuildRuntimeApiServerOptions = {}
     const workspace = store.getWorkspace(workspaceId);
     if (!workspace) {
       return sendError(reply, 404, "workspace not found");
+    }
+    const blockingApps = blockingWorkspaceApps({ store, workspaceId });
+    if (blockingApps.length > 0) {
+      return sendError(reply, 409, blockingWorkspaceAppsMessage(blockingApps));
     }
 
     let resolvedSessionId: string;

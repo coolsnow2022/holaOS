@@ -1548,6 +1548,63 @@ test("app setup route does not start duplicate setup for an app already building
   store.close();
 });
 
+test("app setup timeout honors configured timeout", async () => {
+  const root = makeTempDir("hb-runtime-api-");
+  const workspaceRoot = path.join(root, "workspace");
+  const store = new RuntimeStateStore({
+    dbPath: path.join(root, "runtime.db"),
+    workspaceRoot
+  });
+  const workspace = store.createWorkspace({
+    workspaceId: "workspace-timeout",
+    name: "Workspace Apps",
+    harness: "opencode",
+    status: "active"
+  });
+  const workspaceDir = path.join(workspaceRoot, workspace.id);
+  const appDir = path.join(workspaceDir, "apps", "app-a");
+  fs.mkdirSync(appDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(appDir, "app.runtime.yaml"),
+    [
+      "app_id: app-a",
+      "mcp:",
+      "  port: 4100",
+      "lifecycle:",
+      "  setup: 'node -e \"setTimeout(() => {}, 1000)\"'"
+    ].join("\n"),
+    "utf8"
+  );
+
+  const previousTimeout = process.env.HB_APP_SETUP_TIMEOUT_MS;
+  process.env.HB_APP_SETUP_TIMEOUT_MS = "50";
+  const app = buildTestRuntimeApiServer({ store });
+
+  try {
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/apps/app-a/setup",
+      payload: { workspace_id: workspace.id }
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json().status, "setup_started");
+
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const build = store.getAppBuild({ workspaceId: workspace.id, appId: "app-a" });
+    assert.equal(build?.status, "failed");
+    assert.equal(build?.error, "setup timed out after 1s");
+  } finally {
+    if (previousTimeout === undefined) {
+      delete process.env.HB_APP_SETUP_TIMEOUT_MS;
+    } else {
+      process.env.HB_APP_SETUP_TIMEOUT_MS = previousTimeout;
+    }
+    await app.close();
+    store.close();
+  }
+});
+
 test("internal opencode app bootstrap route starts resolved apps and returns MCP urls", async () => {
   const root = makeTempDir("hb-runtime-api-");
   const workspaceRoot = path.join(root, "workspace");
@@ -2411,6 +2468,58 @@ test("queue route persists input, user message, and runtime state", async () => 
   assert.equal(history.length, 1);
   assert.equal(history[0].role, "user");
   assert.equal(history[0].text, "hello world");
+
+  await app.close();
+  store.close();
+});
+
+test("queue route rejects inputs while workspace apps are still building", async () => {
+  const root = makeTempDir("hb-runtime-api-queue-app-build-");
+  const store = new RuntimeStateStore({
+    dbPath: path.join(root, "runtime.db"),
+    workspaceRoot: path.join(root, "workspace")
+  });
+  const app = buildTestRuntimeApiServer({ store });
+
+  const workspace = store.createWorkspace({
+    workspaceId: "workspace-1",
+    name: "Workspace 1",
+    harness: "opencode",
+    status: "active",
+    mainSessionId: "session-main"
+  });
+
+  const workspaceDir = store.workspaceDir(workspace.id);
+  fs.mkdirSync(path.join(workspaceDir, "apps", "gmail"), { recursive: true });
+  fs.writeFileSync(
+    path.join(workspaceDir, "workspace.yaml"),
+    [
+      "applications:",
+      "  - app_id: gmail",
+      "    config_path: apps/gmail/app.runtime.yaml",
+      "    lifecycle:",
+      "      setup: npm run build"
+    ].join("\n"),
+    "utf8"
+  );
+  store.upsertAppBuild({
+    workspaceId: workspace.id,
+    appId: "gmail",
+    status: "building"
+  });
+
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/v1/agent-sessions/queue",
+    payload: {
+      workspace_id: workspace.id,
+      text: "hello world"
+    }
+  });
+
+  assert.equal(response.statusCode, 409);
+  assert.equal(response.json().detail, "workspace apps are still building: gmail (building)");
+  assert.equal(store.listRuntimeStates(workspace.id).length, 0);
 
   await app.close();
   store.close();
