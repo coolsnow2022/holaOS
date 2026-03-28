@@ -73,11 +73,11 @@ const CHAT_AUTO_SCROLL_THRESHOLD_PX = 72;
 const CHAT_SCROLLBAR_MIN_THUMB_HEIGHT_PX = 40;
 const CHAT_MODEL_STORAGE_KEY = "holaboss-chat-model-v1";
 const CHAT_MODEL_USE_RUNTIME_DEFAULT = "__runtime_default__";
+const LEGACY_UNAVAILABLE_CHAT_MODELS = new Set(["openai/gpt-5.2-mini"]);
 const CHAT_MODEL_PRESETS = [
   "openai/gpt-5.1",
   "openai/gpt-5",
   "openai/gpt-5.2",
-  "openai/gpt-5.2-mini",
   "claude-sonnet-4-5"
 ] as const;
 
@@ -106,10 +106,20 @@ function normalizeErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Request failed.";
 }
 
+function normalizeStoredChatModelPreference(value: string | null | undefined) {
+  const stored = value?.trim();
+  if (!stored) {
+    return CHAT_MODEL_USE_RUNTIME_DEFAULT;
+  }
+  if (LEGACY_UNAVAILABLE_CHAT_MODELS.has(stored.toLowerCase())) {
+    return CHAT_MODEL_USE_RUNTIME_DEFAULT;
+  }
+  return stored;
+}
+
 function loadStoredChatModelPreference() {
   try {
-    const stored = localStorage.getItem(CHAT_MODEL_STORAGE_KEY)?.trim();
-    return stored || CHAT_MODEL_USE_RUNTIME_DEFAULT;
+    return normalizeStoredChatModelPreference(localStorage.getItem(CHAT_MODEL_STORAGE_KEY));
   } catch {
     return CHAT_MODEL_USE_RUNTIME_DEFAULT;
   }
@@ -725,6 +735,13 @@ export function ChatPane({
   useEffect(() => {
     setPendingAttachments([]);
   }, [selectedWorkspaceId]);
+
+  useEffect(() => {
+    const normalizedPreference = normalizeStoredChatModelPreference(chatModelPreference);
+    if (normalizedPreference !== chatModelPreference) {
+      setChatModelPreference(normalizedPreference);
+    }
+  }, [chatModelPreference]);
 
   useEffect(() => {
     try {

@@ -5,10 +5,8 @@ import {
   ChevronRight,
   Clock3,
   FolderOpen,
-  Globe,
   Loader2,
   LockKeyhole,
-  MessageSquareText,
   PanelRightClose,
   PanelRightOpen,
   Sparkles,
@@ -42,10 +40,11 @@ const FILES_PANE_WIDTH_STORAGE_KEY = "holaboss-files-pane-width-v1";
 const BROWSER_PANE_WIDTH_STORAGE_KEY = "holaboss-browser-pane-width-v1";
 const SPACE_VISIBILITY_STORAGE_KEY = "holaboss-space-visibility-v1";
 const THEMES = ["holaboss", "emerald", "cobalt", "ember", "glacier", "mono", "claude", "slate", "paper", "graphite"] as const;
-const DEFAULT_FILES_PANE_WIDTH = 420;
-const DEFAULT_BROWSER_PANE_WIDTH = 460;
 const MIN_UTILITY_PANE_WIDTH = 200;
 const MAX_UTILITY_PANE_WIDTH = 720;
+const LEGACY_DEFAULT_FILES_PANE_WIDTH = 420;
+const DEFAULT_FILES_PANE_WIDTH = MIN_UTILITY_PANE_WIDTH;
+const DEFAULT_BROWSER_PANE_WIDTH = 460;
 const MIN_AGENT_CONTENT_WIDTH = 120;
 const UTILITY_PANE_RESIZER_WIDTH = 16;
 
@@ -74,8 +73,8 @@ type UtilityPaneResizeState =
 const FIXED_SPACE_ORDER: SpaceComponentId[] = ["files", "browser", "agent"];
 const DEFAULT_SPACE_VISIBILITY: SpaceVisibilityState = {
   agent: true,
-  files: false,
-  browser: false
+  files: true,
+  browser: true
 };
 
 export type AppTheme = (typeof THEMES)[number];
@@ -99,20 +98,7 @@ type AgentView =
     };
 
 function loadSpaceVisibility(): SpaceVisibilityState {
-  try {
-    const raw = localStorage.getItem(SPACE_VISIBILITY_STORAGE_KEY);
-    if (!raw) {
-      return DEFAULT_SPACE_VISIBILITY;
-    }
-    const parsed = JSON.parse(raw) as Partial<Record<SpaceComponentId, unknown>>;
-    return {
-      agent: true,
-      files: typeof parsed.files === "boolean" ? parsed.files : DEFAULT_SPACE_VISIBILITY.files,
-      browser: typeof parsed.browser === "boolean" ? parsed.browser : DEFAULT_SPACE_VISIBILITY.browser
-    };
-  } catch {
-    return DEFAULT_SPACE_VISIBILITY;
-  }
+  return DEFAULT_SPACE_VISIBILITY;
 }
 
 function loadFilesPaneWidth(): number {
@@ -120,6 +106,9 @@ function loadFilesPaneWidth(): number {
     const raw = localStorage.getItem(FILES_PANE_WIDTH_STORAGE_KEY);
     const parsed = Number(raw);
     if (Number.isFinite(parsed)) {
+      if (parsed === LEGACY_DEFAULT_FILES_PANE_WIDTH) {
+        return DEFAULT_FILES_PANE_WIDTH;
+      }
       return Math.max(MIN_UTILITY_PANE_WIDTH, Math.min(parsed, MAX_UTILITY_PANE_WIDTH));
     }
   } catch {
@@ -190,41 +179,6 @@ function spaceComponentLabel(componentId: SpaceComponentId) {
     return "Files";
   }
   return "Browser";
-}
-
-function spaceComponentIcon(componentId: SpaceComponentId) {
-  if (componentId === "agent") {
-    return <MessageSquareText size={13} />;
-  }
-  if (componentId === "files") {
-    return <FolderOpen size={13} />;
-  }
-  return <Globe size={13} />;
-}
-
-function SpaceDockToggle({
-  componentId,
-  visible,
-  onToggle
-}: {
-  componentId: SpaceComponentId;
-  visible: boolean;
-  onToggle: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onToggle}
-      className={`inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-[11px] font-medium transition ${
-        visible
-          ? "border-[rgba(247,90,84,0.28)] bg-[rgba(247,90,84,0.1)] text-text-main"
-          : "border-transparent bg-transparent text-text-muted hover:border-panel-border/45 hover:bg-[var(--theme-hover-bg)] hover:text-text-main"
-      }`}
-    >
-      <span className={visible ? "text-[rgba(206,92,84,0.94)]" : "text-text-dim/72"}>{spaceComponentIcon(componentId)}</span>
-      <span>{!visible ? `+ ${spaceComponentLabel(componentId)}` : spaceComponentLabel(componentId)}</span>
-    </button>
-  );
 }
 
 function spaceResizeHandleSpec(
@@ -347,30 +301,25 @@ function FirstWorkspacePane() {
       : templateSourceMode === "empty"
         ? "Empty workspace"
         : "Local template";
-  const sourceStatusLabel =
-    templateSourceMode === "marketplace"
-      ? canUseMarketplaceTemplates
-        ? selectedMarketplaceTemplate?.is_coming_soon
-          ? "Coming soon"
-          : "Marketplace ready"
-        : "Login required"
-      : templateSourceMode === "empty"
-        ? "Minimal scaffold"
-        : selectedTemplateFolder?.rootPath
-          ? "Folder selected"
-          : "Choose a folder";
   const sourceDescription =
     templateSourceMode === "marketplace"
       ? marketplaceTemplatesError ||
-        selectedMarketplaceTemplate?.long_description ||
         selectedMarketplaceTemplate?.description ||
         (canUseMarketplaceTemplates
-          ? "Choose a curated starter to bootstrap the workspace."
-          : "Marketplace templates are optional. Sign in only if you want access to curated starters.")
+          ? "Choose a curated starter."
+          : "Sign in to use curated starters.")
       : templateSourceMode === "empty"
-        ? "Create the smallest valid workspace scaffold with a workspace manifest, AGENTS file, and an empty skills directory."
+        ? "Create the smallest valid workspace shell."
         : selectedTemplateFolder?.description ||
-          "Use an existing folder on disk as the starting point for this workspace.";
+          "Use an existing folder on disk.";
+  const sourceChoiceDetail =
+    templateSourceMode === "marketplace"
+      ? canUseMarketplaceTemplates
+        ? selectedMarketplaceTemplate?.name || `${marketplaceTemplates.length} templates available`
+        : "Sign in required"
+      : templateSourceMode === "empty"
+        ? "Blank scaffold"
+        : selectedTemplateFolder?.templateName || selectedTemplateFolder?.rootPath || "Choose local folder";
 
   const openAuthPopup = () => {
     if (!authButtonRef.current) {
@@ -441,122 +390,115 @@ function FirstWorkspacePane() {
   return (
     <section className="relative flex h-full min-h-0 min-w-0 items-center justify-center overflow-hidden px-3 py-3 sm:px-4 sm:py-4">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_16%_12%,rgba(247,90,84,0.08),transparent_28%),radial-gradient(circle_at_86%_14%,rgba(233,117,109,0.08),transparent_30%)]" />
-      <div className="relative flex w-full max-w-[1240px] flex-1 items-center justify-center">
+      <div className="relative flex w-full max-w-[1080px] flex-1 items-center justify-center">
         <div className="theme-shell mx-auto w-full rounded-[var(--theme-radius-card)] border border-panel-border/45 px-6 py-8 shadow-card sm:px-8 sm:py-9 lg:px-12 lg:py-10">
-          <div className="max-w-4xl">
-            <div className="text-[11px] uppercase tracking-[0.24em] text-text-dim/78">Workspace setup</div>
-            <div className="mt-3 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-              <div className="max-w-2xl">
-                <h1 className="text-[34px] font-semibold tracking-[-0.05em] text-text-main sm:text-[44px]">Create your first workspace</h1>
-                <p className="mt-3 text-[15px] leading-8 text-text-muted/84 sm:text-[16px]">
-                  Choose a starting point, name the workspace, and Holaboss will open it directly in the desktop.
-                </p>
-              </div>
-              <div className="max-w-[360px] text-[12px] leading-6 text-text-muted/78">
-                Marketplace templates are optional. Local folders and empty scaffolds work immediately without signing in.
-              </div>
-            </div>
-          </div>
-
-          <div className="mt-9">
-            <div>
-              <div>
-                <div className="text-[11px] uppercase tracking-[0.22em] text-text-dim/76">Step 1</div>
-                <div className="mt-1 text-[20px] font-medium tracking-[-0.03em] text-text-main">Choose how this workspace starts</div>
-              </div>
-              <div className="mt-2 text-[13px] leading-6 text-text-muted/78">
-                Pick one path. You can switch between them before creating the workspace.
-              </div>
-            </div>
-
-            <div className="mt-4 grid gap-3 lg:grid-cols-3">
-              <FirstWorkspaceChoiceCard
-                title="Local Template"
-                description="Start from a folder that already exists on your machine."
-                detail={selectedTemplateFolder?.templateName || selectedTemplateFolder?.rootPath || "No login required"}
-                icon={<FolderOpen size={18} />}
-                active={templateSourceMode === "local"}
-                onClick={() => {
-                  setTemplateSourceMode("local");
-                }}
-              />
-              <FirstWorkspaceChoiceCard
-                title="Marketplace Template"
-                description="Use a curated starter kit maintained for Holaboss."
-                detail={
-                  canUseMarketplaceTemplates
-                    ? selectedMarketplaceTemplate?.name || `${marketplaceTemplates.length} templates available`
-                    : "Sign in required"
-                }
-                icon={<Sparkles size={18} />}
-                active={templateSourceMode === "marketplace"}
-                badge={!canUseMarketplaceTemplates ? "Login Required" : undefined}
-                onClick={() => {
-                  setTemplateSourceMode("marketplace");
-                }}
-              />
-              <FirstWorkspaceChoiceCard
-                title="Empty Workspace"
-                description="Start from a blank scaffold and configure the rest yourself."
-                detail="workspace.yaml + AGENTS.md + skills/"
-                icon={<span className="text-[18px] leading-none">+</span>}
-                active={templateSourceMode === "empty"}
-                onClick={() => {
-                  setTemplateSourceMode("empty");
-                }}
-              />
-            </div>
+          <div className="max-w-3xl">
+            <div className="text-[11px] uppercase tracking-[0.24em] text-text-dim/78">New workspace</div>
+            <h1 className="mt-3 text-[34px] font-semibold tracking-[-0.05em] text-text-main sm:text-[42px]">
+              Create a workspace
+            </h1>
+            <p className="mt-3 text-[14px] leading-7 text-text-muted/82 sm:text-[15px]">
+              Pick a source, name it, and open it directly in the desktop.
+            </p>
           </div>
 
           <form
             onSubmit={handleCreateWorkspace}
             className="theme-subtle-surface mt-8 rounded-[28px] border border-panel-border/45 p-5 sm:p-6"
           >
-            <div>
+            <div className="grid gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(280px,0.85fr)]">
               <div>
-                <div className="text-[11px] uppercase tracking-[0.24em] text-text-dim/78">Step 2</div>
-                <div className="mt-2 text-[24px] font-medium tracking-[-0.03em] text-text-main">Finish the setup</div>
-                <div className="mt-2 text-[13px] leading-6 text-text-muted/78">
-                  Name the workspace and adjust the source-specific options below.
+                <div className="text-[11px] uppercase tracking-[0.22em] text-text-dim/76">Source</div>
+                <div className="mt-2 text-[22px] font-medium tracking-[-0.03em] text-text-main">
+                  Choose how it starts
+                </div>
+                <div className="mt-4 grid gap-3 md:grid-cols-3 xl:grid-cols-1">
+                  <FirstWorkspaceChoiceCard
+                    title="Local Template"
+                    description="Use a folder already on this machine."
+                    detail={selectedTemplateFolder?.templateName || selectedTemplateFolder?.rootPath || "Choose local folder"}
+                    icon={<FolderOpen size={18} />}
+                    active={templateSourceMode === "local"}
+                    onClick={() => {
+                      setTemplateSourceMode("local");
+                    }}
+                  />
+                  <FirstWorkspaceChoiceCard
+                    title="Marketplace Template"
+                    description="Start from a curated Holaboss starter."
+                    detail={
+                      canUseMarketplaceTemplates
+                        ? selectedMarketplaceTemplate?.name || `${marketplaceTemplates.length} templates available`
+                        : "Sign in required"
+                    }
+                    icon={<Sparkles size={18} />}
+                    active={templateSourceMode === "marketplace"}
+                    badge={!canUseMarketplaceTemplates ? "Login Required" : undefined}
+                    onClick={() => {
+                      setTemplateSourceMode("marketplace");
+                    }}
+                  />
+                  <FirstWorkspaceChoiceCard
+                    title="Empty Workspace"
+                    description="Create the smallest valid scaffold."
+                    detail="workspace.yaml + AGENTS.md + skills/"
+                    icon={<span className="text-[18px] leading-none">+</span>}
+                    active={templateSourceMode === "empty"}
+                    onClick={() => {
+                      setTemplateSourceMode("empty");
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div className="rounded-[24px] border border-panel-border/40 bg-black/8 p-4 sm:p-5">
+                <div className="text-[11px] uppercase tracking-[0.22em] text-text-dim/78">Workspace</div>
+                <div className="mt-2 text-[22px] font-medium tracking-[-0.03em] text-text-main">
+                  Name and harness
+                </div>
+                <div className="mt-4 grid gap-4">
+                  <label className="grid gap-2">
+                    <span className="text-[11px] uppercase tracking-[0.22em] text-text-dim/78">Workspace name</span>
+                    <input
+                      value={newWorkspaceName}
+                      onChange={(event) => setNewWorkspaceName(event.target.value)}
+                      placeholder="My first workspace"
+                      className="theme-control-surface h-12 rounded-[18px] border border-panel-border/45 px-4 text-[14px] text-text-main outline-none placeholder:text-text-dim/50"
+                    />
+                  </label>
+
+                  <label className="grid gap-2">
+                    <span className="text-[11px] uppercase tracking-[0.22em] text-text-dim/78">Harness</span>
+                    <select
+                      value={selectedCreateHarness}
+                      onChange={(event) => setSelectedCreateHarness(event.target.value)}
+                      className="theme-control-surface h-12 rounded-[18px] border border-panel-border/45 px-4 text-[14px] text-text-main outline-none"
+                    >
+                      {createHarnessOptions.map((option) => (
+                        <option key={option.id} value={option.id}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="text-[12px] leading-6 text-text-muted/74">
+                      {selectedCreateHarnessOption?.description || "Default harness with backend bootstrapping and structured output support."}
+                    </span>
+                  </label>
+
+                  <div className="rounded-[18px] border border-panel-border/35 bg-panel-bg/18 px-4 py-3">
+                    <div className="text-[10px] uppercase tracking-[0.16em] text-text-dim/72">Selection</div>
+                    <div className="mt-2 text-[14px] font-medium text-text-main">{sourceLabel}</div>
+                    <div className="mt-1 text-[12px] leading-6 text-text-muted/76">{sourceChoiceDetail}</div>
+                  </div>
                 </div>
               </div>
             </div>
 
-            <div className="mt-6 grid gap-4 md:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
-              <label className="grid gap-2">
-                <span className="text-[11px] uppercase tracking-[0.22em] text-text-dim/78">Workspace name</span>
-                <input
-                  value={newWorkspaceName}
-                  onChange={(event) => setNewWorkspaceName(event.target.value)}
-                  placeholder="My first workspace"
-                  className="theme-control-surface h-12 rounded-[18px] border border-panel-border/45 px-4 text-[14px] text-text-main outline-none placeholder:text-text-dim/50"
-                />
-              </label>
-
-              <label className="grid gap-2">
-                <span className="text-[11px] uppercase tracking-[0.22em] text-text-dim/78">Harness</span>
-                <select
-                  value={selectedCreateHarness}
-                  onChange={(event) => setSelectedCreateHarness(event.target.value)}
-                  className="theme-control-surface h-12 rounded-[18px] border border-panel-border/45 px-4 text-[14px] text-text-main outline-none"
-                >
-                  {createHarnessOptions.map((option) => (
-                    <option key={option.id} value={option.id}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-                <span className="text-[12px] leading-6 text-text-muted/76">
-                  {selectedCreateHarnessOption?.description || "Default harness with backend bootstrapping and structured output support."}
-                </span>
-              </label>
-            </div>
-
-            <div className="mt-5 rounded-[24px] border border-panel-border/40 bg-black/10 p-4 sm:p-5">
-              <div className="flex flex-wrap items-start justify-between gap-4 border-b border-panel-border/30 pb-4">
+            <div className="mt-6 rounded-[24px] border border-panel-border/40 bg-black/10 p-4 sm:p-5">
+              <div className="border-b border-panel-border/30 pb-4">
                 <div>
-                  <div className="text-[11px] uppercase tracking-[0.22em] text-text-dim/76">Source settings</div>
-                  <div className="mt-2 flex items-center gap-2 text-[19px] font-medium tracking-[-0.03em] text-text-main">
+                  <div className="text-[11px] uppercase tracking-[0.22em] text-text-dim/76">Source details</div>
+                  <div className="mt-2 flex items-center gap-2 text-[18px] font-medium tracking-[-0.03em] text-text-main">
                     {templateSourceMode === "marketplace" ? (
                       <Sparkles size={16} className="text-[rgba(206,92,84,0.9)]" />
                     ) : templateSourceMode === "empty" ? (
@@ -566,25 +508,14 @@ function FirstWorkspacePane() {
                     )}
                     <span>{sourceLabel}</span>
                   </div>
-                  <div className="mt-2 max-w-3xl text-[13px] leading-7 text-text-muted/82">{sourceDescription}</div>
+                  <div className="mt-2 max-w-3xl text-[12px] leading-6 text-text-muted/76">{sourceDescription}</div>
                 </div>
-                <span
-                  className={`inline-flex items-center rounded-full border px-3 py-1.5 text-[11px] uppercase tracking-[0.16em] ${
-                    templateSourceMode === "marketplace"
-                      ? canUseMarketplaceTemplates
-                        ? "border-[rgba(247,90,84,0.28)] bg-[rgba(247,90,84,0.08)] text-[rgba(206,92,84,0.94)]"
-                        : "theme-chat-system-bubble"
-                      : "border-panel-border/40 bg-panel-bg/30 text-text-dim/76"
-                  }`}
-                >
-                  {sourceStatusLabel}
-                </span>
               </div>
 
               <div className="mt-4">
                 {templateSourceMode === "marketplace" ? (
                   canUseMarketplaceTemplates ? (
-                    <div className="grid gap-3 lg:grid-cols-[minmax(0,1.05fr)_minmax(260px,0.95fr)]">
+                    <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(260px,0.9fr)]">
                       <label className="grid gap-2">
                         <span className="text-[11px] uppercase tracking-[0.22em] text-text-dim/78">Marketplace template</span>
                         <select
@@ -608,7 +539,7 @@ function FirstWorkspacePane() {
                       </label>
 
                       <div className="rounded-[18px] border border-[rgba(247,90,84,0.16)] bg-[rgba(247,90,84,0.04)] px-4 py-3">
-                        <div className="text-[10px] uppercase tracking-[0.16em] text-text-dim/72">Template details</div>
+                        <div className="text-[10px] uppercase tracking-[0.16em] text-text-dim/72">Preview</div>
                         <div className="mt-2 text-[13px] font-medium text-text-main">
                           {selectedMarketplaceTemplate?.name || "Choose a marketplace template"}
                         </div>
@@ -623,9 +554,9 @@ function FirstWorkspacePane() {
                     <div className="rounded-[20px] border border-[rgba(247,90,84,0.22)] bg-[rgba(247,90,84,0.05)] p-4">
                       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                         <div className="max-w-2xl">
-                          <div className="text-[13px] font-medium text-text-main">Marketplace is locked until you sign in</div>
+                          <div className="text-[13px] font-medium text-text-main">Sign in to use marketplace templates</div>
                           <div className="mt-1 text-[12px] leading-6 text-text-muted/78">
-                            Sign in only if you want curated marketplace templates. Local folders and empty scaffolds still work without an account.
+                            Local folders and empty workspaces still work without an account.
                           </div>
                         </div>
                         <div className="flex flex-wrap gap-2">
@@ -637,49 +568,26 @@ function FirstWorkspacePane() {
                           >
                             Sign in
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => setTemplateSourceMode("local")}
-                            className="inline-flex h-10 items-center justify-center rounded-[14px] border border-panel-border/45 px-3 text-[12px] text-text-muted transition hover:border-[rgba(247,90,84,0.3)] hover:text-text-main"
-                          >
-                            Use Local Template
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setTemplateSourceMode("empty")}
-                            className="inline-flex h-10 items-center justify-center rounded-[14px] border border-panel-border/45 px-3 text-[12px] text-text-muted transition hover:border-[rgba(247,90,84,0.3)] hover:text-text-main"
-                          >
-                            Start Empty
-                          </button>
                         </div>
                       </div>
                     </div>
                   )
                 ) : templateSourceMode === "empty" ? (
-                  <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(240px,0.8fr)]">
-                    <div className="rounded-[18px] border border-panel-border/35 bg-panel-bg/18 px-4 py-3">
-                      <div className="text-[10px] uppercase tracking-[0.16em] text-text-dim/72">Scaffold contents</div>
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        {["workspace.yaml", "AGENTS.md", "skills/"].map((item) => (
-                          <span
-                            key={item}
-                            className="rounded-full border border-panel-border/35 bg-black/10 px-3 py-1.5 text-[11px] uppercase tracking-[0.14em] text-text-dim/74"
-                          >
-                            {item}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="rounded-[18px] border border-panel-border/35 bg-panel-bg/18 px-4 py-3">
-                      <div className="text-[10px] uppercase tracking-[0.16em] text-text-dim/72">What happens next</div>
-                      <div className="mt-2 text-[12px] leading-6 text-text-muted/78">
-                        Holaboss will create the workspace shell and leave the implementation completely open for you to shape.
-                      </div>
+                  <div className="rounded-[18px] border border-panel-border/35 bg-panel-bg/18 px-4 py-3">
+                    <div className="text-[10px] uppercase tracking-[0.16em] text-text-dim/72">Scaffold</div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {["workspace.yaml", "AGENTS.md", "skills/"].map((item) => (
+                        <span
+                          key={item}
+                          className="rounded-full border border-panel-border/35 bg-black/10 px-3 py-1.5 text-[11px] uppercase tracking-[0.14em] text-text-dim/74"
+                        >
+                          {item}
+                        </span>
+                      ))}
                     </div>
                   </div>
                 ) : (
-                  <div className="grid gap-3 lg:grid-cols-[minmax(0,1.05fr)_minmax(260px,0.95fr)]">
+                  <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(260px,0.9fr)]">
                     <div className="grid gap-2">
                       <span className="text-[11px] uppercase tracking-[0.22em] text-text-dim/78">Local template folder</span>
                       <button
@@ -695,7 +603,7 @@ function FirstWorkspacePane() {
                     </div>
 
                     <div className="rounded-[18px] border border-panel-border/35 bg-panel-bg/18 px-4 py-3">
-                      <div className="text-[10px] uppercase tracking-[0.16em] text-text-dim/72">Folder summary</div>
+                      <div className="text-[10px] uppercase tracking-[0.16em] text-text-dim/72">Path</div>
                       <div className="mt-2 text-[12px] leading-6 text-text-muted/78">
                         {selectedTemplateFolder?.rootPath || "Choose a folder and Holaboss will use it as the source template for the new workspace."}
                       </div>
@@ -711,16 +619,7 @@ function FirstWorkspacePane() {
               </div>
             ) : null}
 
-            <div className="mt-6 flex flex-col gap-4 border-t border-panel-border/35 pt-5 md:flex-row md:items-center md:justify-between">
-              <div className="text-[12px] leading-6 text-text-muted/76">
-                {templateSourceMode === "marketplace"
-                  ? canUseMarketplaceTemplates
-                    ? "The selected marketplace template will be copied into a new workspace and opened in the desktop."
-                    : "Sign in to enable curated marketplace templates, or switch to a local folder or empty scaffold."
-                  : templateSourceMode === "empty"
-                    ? "A blank workspace shell will be created and opened immediately."
-                    : "The chosen local folder will be used as the starting point for the new workspace."}
-              </div>
+            <div className="mt-6 flex flex-col gap-4 border-t border-panel-border/35 pt-5 md:flex-row md:items-center md:justify-end">
               <button
                 type="submit"
                 disabled={createDisabled}
@@ -758,7 +657,7 @@ function FirstWorkspaceChoiceCard({
     <button
       type="button"
       onClick={onClick}
-      className={`group relative min-h-[164px] overflow-hidden rounded-[24px] border p-5 text-left transition-all duration-200 ${
+      className={`group relative overflow-hidden rounded-[22px] border p-4 text-left transition-all duration-200 ${
         active
           ? "border-[rgba(247,90,84,0.32)] bg-[linear-gradient(145deg,rgba(247,90,84,0.1),rgba(255,255,255,0.03))] shadow-[0_10px_28px_rgba(25,33,53,0.08)]"
           : "border-panel-border/45 theme-control-surface hover:border-[rgba(247,90,84,0.24)] hover:bg-[var(--theme-hover-bg)]"
@@ -777,9 +676,9 @@ function FirstWorkspaceChoiceCard({
             </span>
           ) : null}
         </div>
-        <div className="mt-5 text-[17px] font-medium tracking-[-0.02em] text-text-main">{title}</div>
-        <div className="mt-2 text-[14px] leading-7 text-text-muted/84">{description}</div>
-        <div className="mt-5 border-t border-panel-border/25 pt-3 text-[12px] leading-6 text-text-dim/76">{detail}</div>
+        <div className="mt-4 text-[16px] font-medium tracking-[-0.02em] text-text-main">{title}</div>
+        <div className="mt-1.5 text-[13px] leading-6 text-text-muted/82">{description}</div>
+        <div className="mt-3 text-[11px] uppercase tracking-[0.14em] text-text-dim/72">{detail}</div>
       </div>
     </button>
   );
@@ -918,6 +817,7 @@ function AppShellContent() {
   const [activeLeftRailItem, setActiveLeftRailItem] = useState<LeftRailItem>("space");
   const [agentView, setAgentView] = useState<AgentView>({ type: "chat" });
   const [chatFocusRequestKey, setChatFocusRequestKey] = useState(1);
+  const [workspaceSwitcherOpen, setWorkspaceSwitcherOpen] = useState(false);
   const [spaceVisibility, setSpaceVisibility] = useState<SpaceVisibilityState>(loadSpaceVisibility);
   const [filesPaneWidth, setFilesPaneWidth] = useState(loadFilesPaneWidth);
   const [browserPaneWidth, setBrowserPaneWidth] = useState(loadBrowserPaneWidth);
@@ -1473,19 +1373,26 @@ function AppShellContent() {
   const handleLeftRailSelect = (item: LeftRailItem) => {
     if (item === "space") {
       setActiveLeftRailItem("space");
+      if (agentView.type === "app") {
+        setAgentView({ type: "chat" });
+      }
       setChatFocusRequestKey((current) => current + 1);
       return;
     }
     setActiveLeftRailItem(item);
   };
 
+  const handleOpenInstalledApp = (appId: string) => {
+    setActiveLeftRailItem("app");
+    setAgentView({
+      type: "app",
+      appId
+    });
+  };
+
   const handleOpenOutput = (entry: OperationsOutputEntry) => {
-    setActiveLeftRailItem("space");
-    setSpaceVisibility((previous) => ({
-      ...previous,
-      agent: true
-    }));
     if (entry.renderer.type === "app") {
+      setActiveLeftRailItem("app");
       setAgentView({
         type: "app",
         appId: entry.renderer.appId,
@@ -1495,6 +1402,11 @@ function AppShellContent() {
       return;
     }
 
+    setActiveLeftRailItem("space");
+    setSpaceVisibility((previous) => ({
+      ...previous,
+      agent: true
+    }));
     setAgentView({
       type: "internal",
       surface: entry.renderer.surface,
@@ -1503,18 +1415,9 @@ function AppShellContent() {
     });
   };
 
-  const toggleSpaceComponent = (componentId: SpaceComponentId) => {
-    if (componentId === "agent") {
-      return;
-    }
-    setSpaceVisibility((previous) => ({
-      ...previous,
-      [componentId]: !previous[componentId]
-    }));
-  };
-
   const spaceMode = activeLeftRailItem === "space";
-  const activeAppId = spaceMode && agentView.type === "app" ? agentView.appId : null;
+  const appMode = activeLeftRailItem === "app";
+  const activeAppId = appMode && agentView.type === "app" ? agentView.appId : null;
   const activeApp = getWorkspaceAppDefinition(activeAppId, installedApps);
   const hasWorkspaces = workspaces.length > 0;
   const hasSelectedWorkspace = Boolean(selectedWorkspace);
@@ -1583,7 +1486,9 @@ function AppShellContent() {
               ? <FileExplorerPane />
               : (
                   <BrowserPane
-                    suspendNativeView={isUtilityPaneResizing}
+                    suspendNativeView={
+                      isUtilityPaneResizing || workspaceSwitcherOpen || settingsDialogOpen
+                    }
                     layoutSyncKey={`${visibleSpacePaneIds.join("|")}:${filesPaneWidth}:${browserPaneWidth}:${showOperationsDrawer ? 1 : 0}`}
                   />
                 )
@@ -1735,7 +1640,10 @@ function AppShellContent() {
 
         {hasWorkspaces ? (
           <div className="relative min-w-0">
-            <TopTabsBar integratedTitleBar={isMacDesktop} />
+            <TopTabsBar
+              integratedTitleBar={isMacDesktop}
+              onWorkspaceSwitcherVisibilityChange={setWorkspaceSwitcherOpen}
+            />
           </div>
         ) : null}
 
@@ -1752,27 +1660,18 @@ function AppShellContent() {
             }`}
             style={{ columnGap: "0.5rem" }}
           >
-            <LeftNavigationRail activeItem={activeLeftRailItem} onSelectItem={handleLeftRailSelect} />
+            <LeftNavigationRail
+              activeItem={activeLeftRailItem}
+              onSelectItem={handleLeftRailSelect}
+              installedApps={installedApps}
+              activeAppId={activeAppId}
+              onSelectApp={handleOpenInstalledApp}
+            />
 
             <div className="flex h-full min-h-0 flex-col overflow-hidden">
               <div className="min-h-0 flex-1 overflow-hidden">
                 {spaceMode ? (
                   <div className="relative flex h-full min-h-0 flex-col overflow-hidden">
-                    <div className="relative z-20 flex shrink-0 justify-center pb-2">
-                      <div className="inline-flex items-center gap-1 rounded-[18px] border border-panel-border/45 bg-panel-bg/94 px-2 py-2 shadow-[0_12px_24px_rgba(25,33,53,0.08)] backdrop-blur">
-                        <SpaceDockToggle
-                          componentId="files"
-                          visible={spaceVisibility.files}
-                          onToggle={() => toggleSpaceComponent("files")}
-                        />
-                        <SpaceDockToggle
-                          componentId="browser"
-                          visible={spaceVisibility.browser}
-                          onToggle={() => toggleSpaceComponent("browser")}
-                        />
-                      </div>
-                    </div>
-
                     <div ref={utilityPaneHostRef} className="min-h-0 flex-1 overflow-hidden">
                       {spacePanes.length > 0 ? (
                         <div className="flex h-full min-h-0 min-w-0 items-stretch overflow-hidden">
@@ -1810,12 +1709,32 @@ function AppShellContent() {
                           <div className="max-w-[360px] px-6 text-center">
                             <div className="text-[22px] font-medium tracking-[-0.03em] text-text-main">Turn on a space surface</div>
                             <div className="mt-3 text-[13px] leading-6 text-text-muted/78">
-                              Use the centered top tab to turn `Files` or `Browser` on.
+                              Space keeps your files, browser, and agent panes available together.
                             </div>
                           </div>
                         </section>
                       )}
                     </div>
+                  </div>
+                ) : activeLeftRailItem === "app" ? (
+                  <div className="h-full min-h-0 overflow-hidden">
+                    {agentView.type === "app" ? (
+                      <AppSurfacePane
+                        appId={agentView.appId}
+                        app={activeAppId === agentView.appId ? activeApp : getWorkspaceAppDefinition(agentView.appId, installedApps)}
+                        resourceId={agentView.resourceId}
+                        view={agentView.view}
+                      />
+                    ) : (
+                      <section className="theme-shell flex h-full min-h-0 items-center justify-center rounded-[var(--theme-radius-card)] border border-panel-border/45 shadow-card">
+                        <div className="max-w-[360px] px-6 text-center">
+                          <div className="text-[22px] font-medium tracking-[-0.03em] text-text-main">Choose an app</div>
+                          <div className="mt-3 text-[13px] leading-6 text-text-muted/78">
+                            Select a workspace app from the left rail to open its dedicated screen.
+                          </div>
+                        </div>
+                      </section>
+                    )}
                   </div>
                 ) : activeLeftRailItem === "automations" ? (
                   <div className="h-full min-h-0 overflow-hidden">

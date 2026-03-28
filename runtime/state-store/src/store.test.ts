@@ -315,6 +315,46 @@ test("runtime state round trip supports ensure, update, list, and lookup", () =>
   store.close();
 });
 
+test("state store lists expired claimed inputs", () => {
+  const root = makeTempDir("hb-state-store-");
+  const store = new RuntimeStateStore({
+    dbPath: path.join(root, "runtime.db"),
+    workspaceRoot: path.join(root, "workspace")
+  });
+
+  store.enqueueInput({
+    workspaceId: "workspace-1",
+    sessionId: "session-main",
+    payload: { text: "queued" }
+  });
+  const stale = store.enqueueInput({
+    workspaceId: "workspace-1",
+    sessionId: "session-main",
+    payload: { text: "stale" }
+  });
+  const active = store.enqueueInput({
+    workspaceId: "workspace-1",
+    sessionId: "session-main",
+    payload: { text: "active" }
+  });
+
+  store.updateInput(stale.inputId, {
+    status: "CLAIMED",
+    claimedBy: "worker-old",
+    claimedUntil: "2000-01-01T00:00:00.000Z"
+  });
+  store.updateInput(active.inputId, {
+    status: "CLAIMED",
+    claimedBy: "worker-new",
+    claimedUntil: "2999-01-01T00:00:00.000Z"
+  });
+
+  const expired = store.listExpiredClaimedInputs("2026-01-01T00:00:00.000Z");
+
+  assert.deepEqual(expired.map((record) => record.inputId), [stale.inputId]);
+  store.close();
+});
+
 test("session messages preserve ascending order and include metadata placeholder", () => {
   const root = makeTempDir("hb-state-store-");
   const store = new RuntimeStateStore({

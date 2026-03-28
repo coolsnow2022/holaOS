@@ -5733,7 +5733,10 @@ async function openSessionOutputStream(
             headers: {
               Accept: "text/event-stream"
             },
-            timeout: 30000
+            // Session output uses a long-lived SSE connection. Let runtime-side
+            // queue and runner recovery determine terminal failure instead of
+            // aborting the desktop stream after 30s of quiet.
+            timeout: 0
           },
           (response) => {
             const statusCode = response.statusCode ?? 0;

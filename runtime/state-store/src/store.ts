@@ -657,6 +657,22 @@ export class RuntimeStateStore {
     return Boolean(row);
   }
 
+  listExpiredClaimedInputs(nowIso = utcNowIso()): SessionInputRecord[] {
+    const rows = this.db()
+      .prepare<[string], Record<string, unknown>>(`
+        SELECT *
+        FROM agent_session_inputs
+        WHERE status = 'CLAIMED'
+          AND claimed_until IS NOT NULL
+          AND datetime(claimed_until) <= datetime(?)
+        ORDER BY datetime(claimed_until) ASC, datetime(updated_at) ASC
+      `)
+      .all(nowIso);
+    return rows
+      .map((row) => this.rowToInput(row))
+      .filter((row): row is SessionInputRecord => row !== null);
+  }
+
   ensureRuntimeState(params: {
     workspaceId: string;
     sessionId: string;
