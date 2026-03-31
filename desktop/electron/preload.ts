@@ -487,32 +487,18 @@ interface HolabossSessionStreamHandlePayload {
   streamId: string;
 }
 
-type WorkspaceAppBuildStatus =
-  | "unknown"
-  | "pending"
-  | "building"
-  | "completed"
-  | "failed"
-  | "running"
-  | "stopped";
-
 interface InstalledWorkspaceAppPayload {
   app_id: string;
   config_path: string;
   lifecycle: Record<string, string> | null;
-  build_status: WorkspaceAppBuildStatus;
+  build_status?: string;
+  ready: boolean;
+  error: string | null;
 }
 
 interface InstalledWorkspaceAppListResponsePayload {
   apps: InstalledWorkspaceAppPayload[];
   count: number;
-}
-
-interface WorkspaceAppLifecycleActionPayload {
-  app_id: string;
-  status: string;
-  detail: string;
-  ports: Record<string, number>;
 }
 
 interface WorkspaceLifecycleBlockingAppPayload {
@@ -548,6 +534,113 @@ interface HolabossSessionStreamDebugEntry {
   streamId: string;
   phase: string;
   detail: string;
+}
+
+interface IntegrationCatalogResponsePayload {
+  providers: {
+    provider_id: string;
+    display_name: string;
+    description: string;
+    auth_modes: string[];
+    supports_oss: boolean;
+    supports_managed: boolean;
+    default_scopes: string[];
+    docs_url: string | null;
+  }[];
+}
+
+interface IntegrationConnectionPayload {
+  connection_id: string;
+  provider_id: string;
+  owner_user_id: string;
+  account_label: string;
+  account_external_id: string | null;
+  auth_mode: string;
+  granted_scopes: string[];
+  status: string;
+  secret_ref: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface IntegrationConnectionListResponsePayload {
+  connections: IntegrationConnectionPayload[];
+}
+
+interface IntegrationBindingListResponsePayload {
+  bindings: {
+    binding_id: string;
+    workspace_id: string;
+    target_type: string;
+    target_id: string;
+    integration_key: string;
+    connection_id: string;
+    is_default: boolean;
+    created_at: string;
+    updated_at: string;
+  }[];
+}
+
+interface IntegrationBindingPayload {
+  binding_id: string;
+  workspace_id: string;
+  target_type: string;
+  target_id: string;
+  integration_key: string;
+  connection_id: string;
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+interface IntegrationUpsertBindingPayload {
+  connection_id: string;
+  is_default?: boolean;
+}
+
+interface IntegrationCreateConnectionPayload {
+  provider_id: string;
+  owner_user_id: string;
+  account_label: string;
+  auth_mode: string;
+  granted_scopes: string[];
+  secret_ref?: string;
+}
+
+interface IntegrationUpdateConnectionPayload {
+  status?: string;
+  secret_ref?: string;
+  account_label?: string;
+}
+
+interface OAuthAppConfigPayload {
+  provider_id: string;
+  client_id: string;
+  client_secret: string;
+  authorize_url: string;
+  token_url: string;
+  scopes: string[];
+  redirect_port: number;
+  created_at: string;
+  updated_at: string;
+}
+
+interface OAuthAppConfigListResponsePayload {
+  configs: OAuthAppConfigPayload[];
+}
+
+interface OAuthAppConfigUpsertPayload {
+  client_id: string;
+  client_secret: string;
+  authorize_url: string;
+  token_url: string;
+  scopes: string[];
+  redirect_port?: number;
+}
+
+interface OAuthAuthorizeResponsePayload {
+  authorize_url: string;
+  state: string;
 }
 
 contextBridge.exposeInMainWorld("electronAPI", {
@@ -630,6 +723,18 @@ contextBridge.exposeInMainWorld("electronAPI", {
       return () => ipcRenderer.removeListener("workbench:openBrowser", wrapped);
     }
   },
+  appSurface: {
+    navigate: (workspaceId: string, appId: string, path?: string) =>
+      ipcRenderer.invoke("appSurface:navigate", workspaceId, appId, path) as Promise<void>,
+    setBounds: (bounds: { x: number; y: number; width: number; height: number }) =>
+      ipcRenderer.invoke("appSurface:setBounds", bounds) as Promise<void>,
+    reload: (appId: string) =>
+      ipcRenderer.invoke("appSurface:reload", appId) as Promise<void>,
+    destroy: (appId: string) =>
+      ipcRenderer.invoke("appSurface:destroy", appId) as Promise<void>,
+    hide: () =>
+      ipcRenderer.invoke("appSurface:hide") as Promise<void>,
+  },
   workspace: {
     getClientConfig: () => ipcRenderer.invoke("workspace:getClientConfig") as Promise<HolabossClientConfigPayload>,
     listMarketplaceTemplates: () =>
@@ -643,10 +748,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
       ipcRenderer.invoke("workspace:activateWorkspace", workspaceId) as Promise<WorkspaceLifecyclePayload>,
     listInstalledApps: (workspaceId: string) =>
       ipcRenderer.invoke("workspace:listInstalledApps", workspaceId) as Promise<InstalledWorkspaceAppListResponsePayload>,
-    startInstalledApp: (workspaceId: string, appId: string) =>
-      ipcRenderer.invoke("workspace:startInstalledApp", workspaceId, appId) as Promise<WorkspaceAppLifecycleActionPayload>,
-    stopInstalledApp: (workspaceId: string, appId: string) =>
-      ipcRenderer.invoke("workspace:stopInstalledApp", workspaceId, appId) as Promise<WorkspaceAppLifecycleActionPayload>,
+    removeInstalledApp: (workspaceId: string, appId: string) =>
+      ipcRenderer.invoke("workspace:removeInstalledApp", workspaceId, appId) as Promise<void>,
     listOutputs: (workspaceId: string) =>
       ipcRenderer.invoke("workspace:listOutputs", workspaceId) as Promise<WorkspaceOutputListResponsePayload>,
     listSkills: (workspaceId: string) =>
@@ -695,6 +798,30 @@ contextBridge.exposeInMainWorld("electronAPI", {
     getSessionStreamDebug: () =>
       ipcRenderer.invoke("workspace:getSessionStreamDebug") as Promise<HolabossSessionStreamDebugEntry[]>,
     isVerboseTelemetryEnabled: () => ipcRenderer.invoke("workspace:isVerboseTelemetryEnabled") as Promise<boolean>,
+    listIntegrationCatalog: () =>
+      ipcRenderer.invoke("workspace:listIntegrationCatalog") as Promise<IntegrationCatalogResponsePayload>,
+    listIntegrationConnections: (params?: { providerId?: string; ownerUserId?: string }) =>
+      ipcRenderer.invoke("workspace:listIntegrationConnections", params) as Promise<IntegrationConnectionListResponsePayload>,
+    listIntegrationBindings: (workspaceId: string) =>
+      ipcRenderer.invoke("workspace:listIntegrationBindings", workspaceId) as Promise<IntegrationBindingListResponsePayload>,
+    upsertIntegrationBinding: (workspaceId: string, targetType: string, targetId: string, integrationKey: string, payload: IntegrationUpsertBindingPayload) =>
+      ipcRenderer.invoke("workspace:upsertIntegrationBinding", workspaceId, targetType, targetId, integrationKey, payload) as Promise<IntegrationBindingPayload>,
+    createIntegrationConnection: (payload: IntegrationCreateConnectionPayload) =>
+      ipcRenderer.invoke("workspace:createIntegrationConnection", payload) as Promise<IntegrationConnectionPayload>,
+    updateIntegrationConnection: (connectionId: string, payload: IntegrationUpdateConnectionPayload) =>
+      ipcRenderer.invoke("workspace:updateIntegrationConnection", connectionId, payload) as Promise<IntegrationConnectionPayload>,
+    deleteIntegrationConnection: (connectionId: string) =>
+      ipcRenderer.invoke("workspace:deleteIntegrationConnection", connectionId) as Promise<{ deleted: boolean }>,
+    deleteIntegrationBinding: (bindingId: string, workspaceId: string) =>
+      ipcRenderer.invoke("workspace:deleteIntegrationBinding", bindingId, workspaceId) as Promise<{ deleted: boolean }>,
+    listOAuthConfigs: () =>
+      ipcRenderer.invoke("workspace:listOAuthConfigs") as Promise<OAuthAppConfigListResponsePayload>,
+    upsertOAuthConfig: (providerId: string, payload: OAuthAppConfigUpsertPayload) =>
+      ipcRenderer.invoke("workspace:upsertOAuthConfig", providerId, payload) as Promise<OAuthAppConfigPayload>,
+    deleteOAuthConfig: (providerId: string) =>
+      ipcRenderer.invoke("workspace:deleteOAuthConfig", providerId) as Promise<{ deleted: boolean }>,
+    startOAuthFlow: (provider: string) =>
+      ipcRenderer.invoke("workspace:startOAuthFlow", provider) as Promise<OAuthAuthorizeResponsePayload>,
     onSessionStreamEvent: (listener: (payload: HolabossSessionStreamEventPayload) => void) => {
       const wrapped = (_event: Electron.IpcRendererEvent, payload: HolabossSessionStreamEventPayload) => listener(payload);
       ipcRenderer.on("workspace:sessionStream", wrapped);

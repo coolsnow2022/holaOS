@@ -43,6 +43,7 @@ import {
 import {
   AppLifecycleExecutorError,
   appBuildHasCompletedSetup,
+  isAppHealthy,
   type AppLifecycleExecutorLike,
   RuntimeAppLifecycleExecutor
 } from "./app-lifecycle-worker.js";
@@ -61,6 +62,12 @@ import {
   DesktopBrowserToolServiceError,
   type DesktopBrowserToolServiceLike
 } from "./desktop-browser-tools.js";
+import {
+  IntegrationServiceError,
+  RuntimeIntegrationService
+} from "./integrations.js";
+import { BrokerError, IntegrationBrokerService } from "./integration-broker.js";
+import { OAuthService } from "./oauth-service.js";
 import {
   RuntimeAgentToolsService,
   RuntimeAgentToolsServiceError,
@@ -103,6 +110,8 @@ export interface BuildRuntimeApiServerOptions {
   runtimeConfigService?: RuntimeConfigServiceLike;
   browserToolService?: DesktopBrowserToolServiceLike;
   runnerExecutor?: RunnerExecutorLike;
+  enableAppHealthMonitor?: boolean;
+  startAppsOnReady?: boolean;
 }
 
 function resolveQueueWorker(
@@ -1188,17 +1197,281 @@ export function buildRuntimeApiServer(options: BuildRuntimeApiServerOptions = {}
   });
   const backgroundTasks = new Set<Promise<void>>();
   const appSetupTasks = new Map<string, Promise<void>>();
-  const appLifecycleExecutor = options.appLifecycleExecutor ?? new RuntimeAppLifecycleExecutor();
+  const appLifecycleExecutor = options.appLifecycleExecutor ?? new RuntimeAppLifecycleExecutor({ store });
   const memoryService = options.memoryService ?? new FilesystemMemoryService({ workspaceRoot: store.workspaceRoot });
   const runtimeConfigService = options.runtimeConfigService ?? new FileRuntimeConfigService();
   const browserToolService = options.browserToolService ?? new DesktopBrowserToolService();
+  const integrationService = new RuntimeIntegrationService(store);
+  const brokerService = new IntegrationBrokerService(store);
+  const oauthService = new OAuthService(store);
   const runtimeAgentToolsService = new RuntimeAgentToolsService(store);
   const runnerExecutor = options.runnerExecutor ?? new NativeRunnerExecutor();
   const queueWorker = resolveQueueWorker(options, app, store);
   const cronWorker = resolveCronWorker(options, app, store, queueWorker);
   const bridgeWorker = resolveBridgeWorker(options, app, store, memoryService);
 
+  // ---------------------------------------------------------------------------
+  // App liveness: ensure enabled apps are running + health monitoring
+  // ---------------------------------------------------------------------------
+
+  const HEALTH_MONITOR_INTERVAL_MS = 30_000;
+  const MAX_AUTO_RESTART_ATTEMPTS = 5;
+  const autoRestartAttempts = new Map<string, number>();
+  let healthMonitorTimer: ReturnType<typeof setInterval> | null = null;
+
+  async function ensureAppRunning(workspaceId: string, appId: string): Promise<void> {
+    const workspaceDir = store.workspaceDir(workspaceId);
+    const resolved = resolveWorkspaceAppRuntime(workspaceDir, appId, {
+      store,
+      workspaceId,
+      allocatePorts: true
+    });
+
+    // Already healthy — sync DB and return.
+    if (
+      await isAppHealthy({
+        resolvedApp: resolved.resolvedApp,
+        httpPort: resolved.ports.http,
+        mcpPort: resolved.ports.mcp
+      })
+    ) {
+      store.upsertAppBuild({ workspaceId, appId, status: "running" });
+      return;
+    }
+
+    // Setup needed?
+    const build = store.getAppBuild({ workspaceId, appId });
+    if (
+      !appBuildHasCompletedSetup(build?.status) &&
+      resolved.resolvedApp.lifecycle.setup.trim().length > 0
+    ) {
+      await runAppSetup({
+        store,
+        workspaceDir,
+        workspaceId,
+        appId,
+        setupCommand: resolved.resolvedApp.lifecycle.setup
+      });
+      const afterSetup = store.getAppBuild({ workspaceId, appId });
+      if (afterSetup?.status === "failed") {
+        throw new Error(afterSetup.error ?? "setup failed");
+      }
+    }
+
+    // Start app process.
+    const result = await appLifecycleExecutor.startApp({
+      appId,
+      appDir: resolved.appDir,
+      httpPort: resolved.ports.http,
+      mcpPort: resolved.ports.mcp,
+      resolvedApp: resolved.resolvedApp,
+      skipSetup: true
+    });
+    store.upsertAppBuild({
+      workspaceId,
+      appId,
+      status: result.status === "started" ? "running" : result.status
+    });
+  }
+
+  async function ensureAllAppsRunning(
+    workspaceId: string
+  ): Promise<{ apps: Array<{ app_id: string; ready: boolean; error: string | null }> }> {
+    const workspace = store.getWorkspace(workspaceId);
+    if (!workspace) {
+      return { apps: [] };
+    }
+    const workspaceDir = store.workspaceDir(workspaceId);
+    const entries = listWorkspaceApplications(workspaceDir);
+    const validEntries = entries.filter(
+      (e) => typeof e.app_id === "string" && e.app_id.length > 0
+    );
+
+    const results = await Promise.allSettled(
+      validEntries.map((entry) => ensureAppRunning(workspaceId, entry.app_id as string))
+    );
+
+    return {
+      apps: results.map((r, i) => ({
+        app_id: validEntries[i].app_id as string,
+        ready: r.status === "fulfilled",
+        error:
+          r.status === "rejected"
+            ? (r.reason instanceof Error ? r.reason.message : String(r.reason)).slice(0, 2000)
+            : null
+      }))
+    };
+  }
+
+  function appUsesIntegration(resolvedApp: {
+    integrations?: Array<{ key: string; provider: string }>;
+  }, integrationKey: string): boolean {
+    const normalizedIntegrationKey = integrationKey.trim().toLowerCase();
+    if (!normalizedIntegrationKey) {
+      return false;
+    }
+    return (resolvedApp.integrations ?? []).some((requirement) => {
+      return (
+        requirement.key.trim().toLowerCase() === normalizedIntegrationKey ||
+        requirement.provider.trim().toLowerCase() === normalizedIntegrationKey
+      );
+    });
+  }
+
+  async function refreshAppsForIntegrationBinding(params: {
+    workspaceId: string;
+    integrationKey: string;
+    targetType: "workspace" | "app" | "agent";
+    targetId: string;
+  }): Promise<void> {
+    if (params.targetType === "agent") {
+      return;
+    }
+
+    const workspace = store.getWorkspace(params.workspaceId);
+    if (!workspace) {
+      return;
+    }
+
+    const workspaceDir = store.workspaceDir(params.workspaceId);
+    const entries = listWorkspaceApplications(workspaceDir);
+    for (const entry of entries) {
+      const appId = typeof entry.app_id === "string" ? entry.app_id : "";
+      if (!appId) {
+        continue;
+      }
+
+      if (params.targetType === "app" && appId !== params.targetId) {
+        continue;
+      }
+
+      const build = store.getAppBuild({ workspaceId: params.workspaceId, appId });
+      if (!appBuildHasCompletedSetup(build?.status)) {
+        continue;
+      }
+
+      let resolved;
+      try {
+        resolved = resolveWorkspaceAppRuntime(workspaceDir, appId, {
+          store,
+          workspaceId: params.workspaceId,
+          allocatePorts: true
+        });
+      } catch (error) {
+        app.log.warn(
+          { workspaceId: params.workspaceId, appId, error: error instanceof Error ? error.message : String(error) },
+          "skipping app refresh after integration binding because app runtime could not be resolved"
+        );
+        continue;
+      }
+
+      if (!appUsesIntegration(resolved.resolvedApp, params.integrationKey)) {
+        continue;
+      }
+
+      await appLifecycleExecutor.stopApp({
+        appId,
+        appDir: resolved.appDir,
+        resolvedApp: resolved.resolvedApp
+      });
+      store.upsertAppBuild({ workspaceId: params.workspaceId, appId, status: "stopped" });
+      await ensureAppRunning(params.workspaceId, appId);
+    }
+  }
+
+  function startHealthMonitor(): void {
+    if (healthMonitorTimer) {
+      return;
+    }
+    healthMonitorTimer = setInterval(() => {
+      void runHealthMonitorCycle();
+    }, HEALTH_MONITOR_INTERVAL_MS);
+  }
+
+  async function runHealthMonitorCycle(): Promise<void> {
+    let workspaces: WorkspaceRecord[];
+    try {
+      workspaces = store.listWorkspaces({ includeDeleted: false });
+    } catch {
+      return;
+    }
+    for (const ws of workspaces) {
+      if (ws.status !== "active") {
+        continue;
+      }
+      let entries: Array<Record<string, unknown>>;
+      try {
+        entries = listWorkspaceApplications(store.workspaceDir(ws.id));
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        const appId = typeof entry.app_id === "string" ? entry.app_id : "";
+        if (!appId) {
+          continue;
+        }
+        const build = store.getAppBuild({ workspaceId: ws.id, appId });
+        if (!appBuildHasCompletedSetup(build?.status)) {
+          continue;
+        }
+
+        let resolved;
+        try {
+          resolved = resolveWorkspaceAppRuntime(store.workspaceDir(ws.id), appId, {
+            store,
+            workspaceId: ws.id
+          });
+        } catch {
+          continue;
+        }
+
+        let healthy = false;
+        try {
+          healthy = await isAppHealthy({
+            resolvedApp: resolved.resolvedApp,
+            httpPort: resolved.ports.http,
+            mcpPort: resolved.ports.mcp
+          });
+        } catch {
+          // treat as unhealthy
+        }
+
+        const key = `${ws.id}:${appId}`;
+        if (healthy) {
+          autoRestartAttempts.delete(key);
+          if (build?.status !== "running") {
+            store.upsertAppBuild({ workspaceId: ws.id, appId, status: "running" });
+          }
+          continue;
+        }
+
+        const attempts = (autoRestartAttempts.get(key) ?? 0) + 1;
+        autoRestartAttempts.set(key, attempts);
+        if (attempts <= MAX_AUTO_RESTART_ATTEMPTS) {
+          app.log.info({ workspaceId: ws.id, appId, attempt: attempts }, "health monitor: restarting unhealthy app");
+          void ensureAppRunning(ws.id, appId).catch((err) => {
+            app.log.error({ workspaceId: ws.id, appId, err: err instanceof Error ? err.message : String(err) }, "health monitor: restart failed");
+          });
+        } else if (attempts === MAX_AUTO_RESTART_ATTEMPTS + 1) {
+          app.log.error({ workspaceId: ws.id, appId, attempts: attempts - 1 }, "health monitor: max restart attempts exceeded");
+          store.upsertAppBuild({
+            workspaceId: ws.id,
+            appId,
+            status: "failed",
+            error: `App crashed and failed to recover after ${MAX_AUTO_RESTART_ATTEMPTS} attempts`
+          });
+        }
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+
   app.addHook("onClose", async () => {
+    if (healthMonitorTimer) {
+      clearInterval(healthMonitorTimer);
+      healthMonitorTimer = null;
+    }
     await bridgeWorker?.close();
     await cronWorker?.close();
     await queueWorker?.close();
@@ -1211,6 +1484,21 @@ export function buildRuntimeApiServer(options: BuildRuntimeApiServerOptions = {}
     await queueWorker?.start();
     await cronWorker?.start();
     await bridgeWorker?.start();
+    if (options.enableAppHealthMonitor !== false) {
+      startHealthMonitor();
+    }
+
+    if (options.startAppsOnReady !== false) {
+      // Auto-start all enabled apps for active workspaces.
+      const workspaces = store.listWorkspaces({ includeDeleted: false });
+      for (const ws of workspaces) {
+        if (ws.status === "active") {
+          void ensureAllAppsRunning(ws.id).catch((err) => {
+            app.log.error({ workspaceId: ws.id, err: err instanceof Error ? err.message : String(err) }, "auto-start apps on ready failed");
+          });
+        }
+      }
+    }
   });
 
   app.get("/healthz", async () => ({ ok: true }));
@@ -1284,6 +1572,250 @@ export function buildRuntimeApiServer(options: BuildRuntimeApiServerOptions = {}
       return sendError(reply, 500, error instanceof Error ? error.message : "browser tool execution failed");
     }
   });
+
+  app.get("/api/v1/integrations/catalog", async () => {
+    return integrationService.getCatalog();
+  });
+
+  app.get("/api/v1/integrations/connections", async (request, reply) => {
+    const query = isRecord(request.query) ? request.query : {};
+    try {
+      return integrationService.listConnections({
+        providerId: optionalString(query.provider_id),
+        ownerUserId: optionalString(query.owner_user_id)
+      });
+    } catch (error) {
+      if (error instanceof IntegrationServiceError) {
+        return sendError(reply, error.statusCode, error.message);
+      }
+      return sendError(reply, 500, error instanceof Error ? error.message : "integration connections failed");
+    }
+  });
+
+  app.post("/api/v1/integrations/connections", async (request, reply) => {
+    if (!isRecord(request.body)) {
+      return sendError(reply, 400, "request body must be an object");
+    }
+    try {
+      return integrationService.createConnection({
+        providerId: typeof request.body.provider_id === "string" ? request.body.provider_id : "",
+        ownerUserId: typeof request.body.owner_user_id === "string" ? request.body.owner_user_id : "",
+        accountLabel: typeof request.body.account_label === "string" ? request.body.account_label : "",
+        authMode: typeof request.body.auth_mode === "string" ? request.body.auth_mode : "manual_token",
+        grantedScopes: Array.isArray(request.body.granted_scopes) ? request.body.granted_scopes : [],
+        secretRef: typeof request.body.secret_ref === "string" ? request.body.secret_ref : undefined,
+        accountExternalId: typeof request.body.account_external_id === "string" ? request.body.account_external_id : undefined
+      });
+    } catch (error) {
+      if (error instanceof IntegrationServiceError) {
+        return sendError(reply, error.statusCode, error.message);
+      }
+      return sendError(reply, 500, error instanceof Error ? error.message : "connection creation failed");
+    }
+  });
+
+  app.patch("/api/v1/integrations/connections/:connectionId", async (request, reply) => {
+    const params = request.params as { connectionId: string };
+    if (!isRecord(request.body)) {
+      return sendError(reply, 400, "request body must be an object");
+    }
+    try {
+      return integrationService.updateConnection(params.connectionId, {
+        status: typeof request.body.status === "string" ? request.body.status : undefined,
+        secretRef: typeof request.body.secret_ref === "string" ? request.body.secret_ref : undefined,
+        accountLabel: typeof request.body.account_label === "string" ? request.body.account_label : undefined,
+        grantedScopes: Array.isArray(request.body.granted_scopes) ? request.body.granted_scopes : undefined
+      });
+    } catch (error) {
+      if (error instanceof IntegrationServiceError) {
+        return sendError(reply, error.statusCode, error.message);
+      }
+      return sendError(reply, 500, error instanceof Error ? error.message : "connection update failed");
+    }
+  });
+
+  app.delete("/api/v1/integrations/connections/:connectionId", async (request, reply) => {
+    const params = request.params as { connectionId: string };
+    try {
+      return integrationService.deleteConnection(params.connectionId);
+    } catch (error) {
+      if (error instanceof IntegrationServiceError) {
+        return sendError(reply, error.statusCode, error.message);
+      }
+      return sendError(reply, 500, error instanceof Error ? error.message : "connection deletion failed");
+    }
+  });
+
+  app.get("/api/v1/integrations/bindings", async (request, reply) => {
+    const query = isRecord(request.query) ? request.query : {};
+    const workspaceId = optionalString(query.workspace_id);
+    if (!workspaceId) {
+      return sendError(reply, 400, "workspace_id is required");
+    }
+    try {
+      return integrationService.listBindings({
+        workspaceId
+      });
+    } catch (error) {
+      if (error instanceof IntegrationServiceError) {
+        return sendError(reply, error.statusCode, error.message);
+      }
+      return sendError(reply, 500, error instanceof Error ? error.message : "integration bindings failed");
+    }
+  });
+
+  app.put("/api/v1/integrations/bindings/:workspaceId/:targetType/:targetId/:integrationKey", async (request, reply) => {
+    if (!isRecord(request.body)) {
+      return sendError(reply, 400, "request body must be an object");
+    }
+    const params = request.params as {
+      workspaceId: string;
+      targetType: string;
+      targetId: string;
+      integrationKey: string;
+    };
+    const connectionId = optionalString((request.body as Record<string, unknown>).connection_id);
+    if (!connectionId) {
+      return sendError(reply, 400, "connection_id is required");
+    }
+    try {
+      const binding = integrationService.upsertBinding({
+        workspaceId: requiredString(params.workspaceId, "workspaceId"),
+        targetType: requiredString(params.targetType, "targetType"),
+        targetId: requiredString(params.targetId, "targetId"),
+        integrationKey: requiredString(params.integrationKey, "integrationKey"),
+        connectionId,
+        isDefault: optionalBoolean((request.body as Record<string, unknown>).is_default, false)
+      });
+      await refreshAppsForIntegrationBinding({
+        workspaceId: binding.workspace_id,
+        integrationKey: binding.integration_key,
+        targetType: binding.target_type,
+        targetId: binding.target_id
+      });
+      return binding;
+    } catch (error) {
+      if (error instanceof IntegrationServiceError) {
+        return sendError(reply, error.statusCode, error.message);
+      }
+      return sendError(reply, 500, error instanceof Error ? error.message : "integration binding save failed");
+    }
+  });
+
+  app.delete("/api/v1/integrations/bindings/:bindingId", async (request, reply) => {
+    const params = request.params as { bindingId: string };
+    const query = isRecord(request.query) ? request.query : {};
+    const workspaceId = optionalString(query.workspace_id);
+    if (!workspaceId) {
+      return sendError(reply, 400, "workspace_id is required");
+    }
+    const bindingId = optionalString(params.bindingId);
+    if (!bindingId) {
+      return sendError(reply, 400, "bindingId is required");
+    }
+    try {
+      return integrationService.deleteBinding(bindingId, workspaceId);
+    } catch (error) {
+      if (error instanceof IntegrationServiceError) {
+        return sendError(reply, error.statusCode, error.message);
+      }
+      return sendError(reply, 500, error instanceof Error ? error.message : "integration binding delete failed");
+    }
+  });
+
+  app.get("/api/v1/integrations/readiness", async (request, reply) => {
+    const query = isRecord(request.query) ? request.query : {};
+    const workspaceId = optionalString(query.workspace_id);
+    const appId = optionalString(query.app_id);
+    if (!workspaceId) {
+      return sendError(reply, 400, "workspace_id is required");
+    }
+    if (!appId) {
+      return sendError(reply, 400, "app_id is required");
+    }
+    try {
+      return integrationService.checkReadiness({ workspaceId, appId });
+    } catch (error) {
+      if (error instanceof IntegrationServiceError) {
+        return sendError(reply, error.statusCode, error.message);
+      }
+      return sendError(reply, 500, error instanceof Error ? error.message : "integration readiness check failed");
+    }
+  });
+
+  app.post("/api/v1/integrations/broker/token", async (request, reply) => {
+    if (!isRecord(request.body)) {
+      return sendError(reply, 400, "request body must be an object");
+    }
+    const grant = typeof request.body.grant === "string" ? request.body.grant : "";
+    const provider = typeof request.body.provider === "string" ? request.body.provider : "";
+    if (!grant || !provider) {
+      return sendError(reply, 400, "grant and provider are required");
+    }
+    try {
+      return await brokerService.exchangeToken({ grant, provider });
+    } catch (error) {
+      if (error instanceof BrokerError) {
+        return reply.status(error.statusCode).send({ error: error.code, message: error.message });
+      }
+      return sendError(reply, 500, error instanceof Error ? error.message : "broker token exchange failed");
+    }
+  });
+
+  app.get("/api/v1/integrations/oauth/configs", async () => {
+    return { configs: store.listOAuthAppConfigs().map((c) => ({
+      provider_id: c.providerId, client_id: c.clientId,
+      client_secret: "••••••••",
+      authorize_url: c.authorizeUrl, token_url: c.tokenUrl,
+      scopes: c.scopes, redirect_port: c.redirectPort,
+      created_at: c.createdAt, updated_at: c.updatedAt
+    })) };
+  });
+
+  app.put("/api/v1/integrations/oauth/configs/:providerId", async (request, reply) => {
+    const params = request.params as { providerId: string };
+    if (!isRecord(request.body)) return sendError(reply, 400, "body required");
+    try {
+      const record = store.upsertOAuthAppConfig({
+        providerId: params.providerId,
+        clientId: typeof request.body.client_id === "string" ? request.body.client_id : "",
+        clientSecret: typeof request.body.client_secret === "string" ? request.body.client_secret : "",
+        authorizeUrl: typeof request.body.authorize_url === "string" ? request.body.authorize_url : "",
+        tokenUrl: typeof request.body.token_url === "string" ? request.body.token_url : "",
+        scopes: Array.isArray(request.body.scopes) ? request.body.scopes : [],
+        redirectPort: typeof request.body.redirect_port === "number" ? request.body.redirect_port : undefined
+      });
+      return {
+        provider_id: record.providerId, client_id: record.clientId,
+        client_secret: "••••••••",
+        authorize_url: record.authorizeUrl, token_url: record.tokenUrl,
+        scopes: record.scopes, redirect_port: record.redirectPort,
+        created_at: record.createdAt, updated_at: record.updatedAt
+      };
+    } catch (error) {
+      return sendError(reply, 500, error instanceof Error ? error.message : "config save failed");
+    }
+  });
+
+  app.delete("/api/v1/integrations/oauth/configs/:providerId", async (request, reply) => {
+    const params = request.params as { providerId: string };
+    if (!store.deleteOAuthAppConfig(params.providerId)) return sendError(reply, 404, "config not found");
+    return { deleted: true };
+  });
+
+  app.post("/api/v1/integrations/oauth/authorize", async (request, reply) => {
+    if (!isRecord(request.body)) return sendError(reply, 400, "body required");
+    const providerId = typeof request.body.provider === "string" ? request.body.provider : "";
+    const ownerUserId = typeof request.body.owner_user_id === "string" ? request.body.owner_user_id : "local";
+    if (!providerId) return sendError(reply, 400, "provider is required");
+    try {
+      return await oauthService.startFlow(providerId, ownerUserId);
+    } catch (error) {
+      return sendError(reply, 400, error instanceof Error ? error.message : "OAuth flow failed");
+    }
+  });
+
+  // ---- Runtime Agent Tools (onboarding, cronjobs) ----
 
   app.get("/api/v1/capabilities/runtime-tools", async (request) => {
     const workspaceId = capabilityWorkspaceId({
@@ -2201,19 +2733,40 @@ export function buildRuntimeApiServer(options: BuildRuntimeApiServerOptions = {}
     if (!workspace) {
       return sendError(reply, 404, "workspace not found");
     }
-    const apps = listWorkspaceApplications(store.workspaceDir(workspaceId)).map((entry) => {
+    const workspaceDir = store.workspaceDir(workspaceId);
+    const apps = listWorkspaceApplications(workspaceDir).map((entry) => {
       const appId = typeof entry.app_id === "string" ? entry.app_id : "";
+      const build = appId ? store.getAppBuild({ workspaceId, appId }) : null;
+      const status = appId ? resolvedAppBuildStatus({ store, workspaceId, appId, entry }) : "unknown";
       return {
         app_id: appId,
         config_path: typeof entry.config_path === "string" ? entry.config_path : "",
         lifecycle: isRecord(entry.lifecycle) ? entry.lifecycle : null,
-        build_status: appId ? resolvedAppBuildStatus({ store, workspaceId, appId, entry }) : "unknown"
+        build_status: status,
+        ready: status === "running",
+        error: build?.status === "failed" ? (build.error ?? "unknown error") : null
       };
     });
     return {
       apps: apps.filter((entry) => entry.app_id.length > 0),
       count: apps.filter((entry) => entry.app_id.length > 0).length
     };
+  });
+
+  app.post("/api/v1/apps/ensure-running", async (request, reply) => {
+    if (!isRecord(request.body)) {
+      return sendError(reply, 400, "request body must be an object");
+    }
+    const workspaceId = requiredString(request.body.workspace_id, "workspace_id");
+    const workspace = store.getWorkspace(workspaceId);
+    if (!workspace) {
+      return sendError(reply, 404, "workspace not found");
+    }
+    try {
+      return await ensureAllAppsRunning(workspaceId);
+    } catch (error) {
+      return sendError(reply, 500, error instanceof Error ? error.message : "failed to ensure apps running");
+    }
   });
 
   app.post("/api/v1/apps/install", async (request, reply) => {
@@ -2283,31 +2836,26 @@ export function buildRuntimeApiServer(options: BuildRuntimeApiServerOptions = {}
       lifecycle: Object.keys(lifecycle).length > 0 ? lifecycle : null
     });
 
-    if (parsed.lifecycle.setup) {
-      const queued = queueAppSetup({
-        workspaceDir,
-        workspaceId,
-        appId,
-        setupCommand: parsed.lifecycle.setup
-      });
+    // Atomic enable: setup + start in one flow.
+    try {
+      await ensureAppRunning(workspaceId, appId);
       return {
         app_id: appId,
-        status: queued.status,
-        detail: `Files written, ${queued.detail.toLowerCase()}`
+        status: "enabled",
+        detail: "App installed and running",
+        ready: true,
+        error: null
+      };
+    } catch (error) {
+      const message = (error instanceof Error ? error.message : String(error)).slice(0, 2000);
+      return {
+        app_id: appId,
+        status: "enabled",
+        detail: message,
+        ready: false,
+        error: message
       };
     }
-
-    store.upsertAppBuild({
-      workspaceId,
-      appId,
-      status: "stopped"
-    });
-
-    return {
-      app_id: appId,
-      status: "installed",
-      detail: "Files written, no setup command defined"
-    };
   });
 
   app.post("/api/v1/apps/:appId/setup", async (request, reply) => {

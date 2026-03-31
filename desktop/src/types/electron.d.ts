@@ -485,32 +485,18 @@ declare global {
     hasApiKey: boolean;
   }
 
-  type WorkspaceAppBuildStatus =
-    | "unknown"
-    | "pending"
-    | "building"
-    | "completed"
-    | "failed"
-    | "running"
-    | "stopped";
-
   interface InstalledWorkspaceAppPayload {
     app_id: string;
     config_path: string;
     lifecycle: Record<string, string> | null;
-    build_status: WorkspaceAppBuildStatus;
+    build_status?: string;
+    ready: boolean;
+    error: string | null;
   }
 
   interface InstalledWorkspaceAppListResponsePayload {
     apps: InstalledWorkspaceAppPayload[];
     count: number;
-  }
-
-  interface WorkspaceAppLifecycleActionPayload {
-    app_id: string;
-    status: string;
-    detail: string;
-    ports: Record<string, number>;
   }
 
   interface WorkspaceLifecycleBlockingAppPayload {
@@ -652,6 +638,105 @@ declare global {
     detail: string;
   }
 
+  interface IntegrationCatalogProviderPayload {
+    provider_id: string;
+    display_name: string;
+    description: string;
+    auth_modes: string[];
+    supports_oss: boolean;
+    supports_managed: boolean;
+    default_scopes: string[];
+    docs_url: string | null;
+  }
+
+  interface IntegrationCatalogResponsePayload {
+    providers: IntegrationCatalogProviderPayload[];
+  }
+
+  interface IntegrationConnectionPayload {
+    connection_id: string;
+    provider_id: string;
+    owner_user_id: string;
+    account_label: string;
+    account_external_id: string | null;
+    auth_mode: string;
+    granted_scopes: string[];
+    status: string;
+    secret_ref: string | null;
+    created_at: string;
+    updated_at: string;
+  }
+
+  interface IntegrationConnectionListResponsePayload {
+    connections: IntegrationConnectionPayload[];
+  }
+
+  interface IntegrationBindingPayload {
+    binding_id: string;
+    workspace_id: string;
+    target_type: "workspace" | "app" | "agent";
+    target_id: string;
+    integration_key: string;
+    connection_id: string;
+    is_default: boolean;
+    created_at: string;
+    updated_at: string;
+  }
+
+  interface IntegrationBindingListResponsePayload {
+    bindings: IntegrationBindingPayload[];
+  }
+
+  interface IntegrationUpsertBindingPayload {
+    connection_id: string;
+    is_default?: boolean;
+  }
+
+  interface IntegrationCreateConnectionPayload {
+    provider_id: string;
+    owner_user_id: string;
+    account_label: string;
+    auth_mode: string;
+    granted_scopes: string[];
+    secret_ref?: string;
+  }
+
+  interface IntegrationUpdateConnectionPayload {
+    status?: string;
+    secret_ref?: string;
+    account_label?: string;
+  }
+
+  interface OAuthAppConfigPayload {
+    provider_id: string;
+    client_id: string;
+    client_secret: string;
+    authorize_url: string;
+    token_url: string;
+    scopes: string[];
+    redirect_port: number;
+    created_at: string;
+    updated_at: string;
+  }
+
+  interface OAuthAppConfigListResponsePayload {
+    configs: OAuthAppConfigPayload[];
+  }
+
+  interface OAuthAppConfigUpsertPayload {
+    client_id: string;
+    client_secret: string;
+    authorize_url: string;
+    token_url: string;
+    scopes: string[];
+    redirect_port?: number;
+  }
+
+  interface OAuthAuthorizeResponsePayload {
+    authorize_url: string;
+    state: string;
+  }
+
   interface ElectronAPI {
     platform: string;
     versions: {
@@ -696,6 +781,13 @@ declare global {
     workbench: {
       onOpenBrowser: (listener: (payload: WorkbenchOpenBrowserPayload) => void) => () => void;
     };
+    appSurface: {
+      navigate(workspaceId: string, appId: string, path?: string): Promise<void>;
+      setBounds(bounds: { x: number; y: number; width: number; height: number }): Promise<void>;
+      reload(appId: string): Promise<void>;
+      destroy(appId: string): Promise<void>;
+      hide(): Promise<void>;
+    };
     workspace: {
       getClientConfig: () => Promise<HolabossClientConfigPayload>;
       listMarketplaceTemplates: () => Promise<TemplateListResponsePayload>;
@@ -704,8 +796,7 @@ declare global {
       getWorkspaceLifecycle: (workspaceId: string) => Promise<WorkspaceLifecyclePayload>;
       activateWorkspace: (workspaceId: string) => Promise<WorkspaceLifecyclePayload>;
       listInstalledApps: (workspaceId: string) => Promise<InstalledWorkspaceAppListResponsePayload>;
-      startInstalledApp: (workspaceId: string, appId: string) => Promise<WorkspaceAppLifecycleActionPayload>;
-      stopInstalledApp: (workspaceId: string, appId: string) => Promise<WorkspaceAppLifecycleActionPayload>;
+      removeInstalledApp: (workspaceId: string, appId: string) => Promise<void>;
       listOutputs: (workspaceId: string) => Promise<WorkspaceOutputListResponsePayload>;
       listSkills: (workspaceId: string) => Promise<WorkspaceSkillListResponsePayload>;
       getWorkspaceRoot: (workspaceId: string) => Promise<string>;
@@ -735,6 +826,18 @@ declare global {
       closeSessionOutputStream: (streamId: string, reason?: string) => Promise<void>;
       getSessionStreamDebug: () => Promise<HolabossSessionStreamDebugEntry[]>;
       isVerboseTelemetryEnabled: () => Promise<boolean>;
+      listIntegrationCatalog: () => Promise<IntegrationCatalogResponsePayload>;
+      listIntegrationConnections: (params?: { providerId?: string; ownerUserId?: string }) => Promise<IntegrationConnectionListResponsePayload>;
+      listIntegrationBindings: (workspaceId: string) => Promise<IntegrationBindingListResponsePayload>;
+      upsertIntegrationBinding: (workspaceId: string, targetType: string, targetId: string, integrationKey: string, payload: IntegrationUpsertBindingPayload) => Promise<IntegrationBindingPayload>;
+      createIntegrationConnection: (payload: IntegrationCreateConnectionPayload) => Promise<IntegrationConnectionPayload>;
+      updateIntegrationConnection: (connectionId: string, payload: IntegrationUpdateConnectionPayload) => Promise<IntegrationConnectionPayload>;
+      deleteIntegrationConnection: (connectionId: string) => Promise<{ deleted: boolean }>;
+      deleteIntegrationBinding: (bindingId: string, workspaceId: string) => Promise<{ deleted: boolean }>;
+      listOAuthConfigs: () => Promise<OAuthAppConfigListResponsePayload>;
+      upsertOAuthConfig: (providerId: string, payload: OAuthAppConfigUpsertPayload) => Promise<OAuthAppConfigPayload>;
+      deleteOAuthConfig: (providerId: string) => Promise<{ deleted: boolean }>;
+      startOAuthFlow: (provider: string) => Promise<OAuthAuthorizeResponsePayload>;
       onSessionStreamEvent: (listener: (payload: HolabossSessionStreamEventPayload) => void) => () => void;
     };
     auth: {

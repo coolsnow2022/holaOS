@@ -66,7 +66,7 @@ test("startResolvedApplications validates the workspace and starts resolved apps
         app_id: params.appId,
         status: "running",
         detail: "ok",
-        ports: { http: params.httpPort ?? 18080, mcp: params.mcpPort ?? 13100 }
+        ports: { http: params.httpPort ?? 0, mcp: params.mcpPort ?? 0 }
       };
     },
     async stopApp() {
@@ -98,16 +98,14 @@ test("startResolvedApplications validates the workspace and starts resolved apps
     }
   });
 
-  assert.deepEqual(result, {
-    applications: [
-      {
-        app_id: "app-a",
-        mcp_url: "http://localhost:13100/mcp",
-        timeout_ms: 60000,
-        ports: { http: 18080, mcp: 13100 }
-      }
-    ]
-  });
+  assert.equal(result.applications.length, 1);
+  const app = result.applications[0]!;
+  assert.equal(app.app_id, "app-a");
+  assert.equal(app.timeout_ms, 60000);
+  assert.ok(app.ports.http >= 13100, "http port should be in dynamic range");
+  assert.ok(app.ports.mcp >= 13100, "mcp port should be in dynamic range");
+  assert.notEqual(app.ports.http, app.ports.mcp, "http and mcp should be different ports");
+  assert.equal(app.mcp_url, `http://localhost:${app.ports.mcp}/mcp`);
   assert.equal(calls.length, 1);
   assert.equal(calls[0]?.appId, "app-a");
   assert.equal(calls[0]?.appDir, path.join(store.workspaceDir(workspace.id), "apps", "app-a"));
@@ -138,7 +136,7 @@ test("bootstrapResolvedApplications starts resolved apps without a runtime API h
         app_id: params.appId,
         status: "running",
         detail: "ok",
-        ports: { http: params.httpPort ?? 18080, mcp: params.mcpPort ?? 13100 }
+        ports: { http: params.httpPort ?? 0, mcp: params.mcpPort ?? 0 }
       };
     },
     async stopApp() {
@@ -168,16 +166,13 @@ test("bootstrapResolvedApplications starts resolved apps without a runtime API h
     appLifecycleExecutor
   });
 
-  assert.deepEqual(result, {
-    applications: [
-      {
-        app_id: "app-a",
-        mcp_url: "http://localhost:13100/mcp",
-        timeout_ms: 60000,
-        ports: { http: 18080, mcp: 13100 }
-      }
-    ]
-  });
+  assert.equal(result.applications.length, 1);
+  const app = result.applications[0]!;
+  assert.equal(app.app_id, "app-a");
+  assert.ok(app.ports.http >= 13100);
+  assert.ok(app.ports.mcp >= 13100);
+  assert.notEqual(app.ports.http, app.ports.mcp);
+  assert.equal(app.mcp_url, `http://localhost:${app.ports.mcp}/mcp`);
   assert.equal(calls.length, 1);
   assert.equal(calls[0]?.appId, "app-a");
   assert.equal(calls[0]?.appDir, path.join(workspaceDir, "apps", "app-a"));
@@ -208,7 +203,7 @@ test("bootstrapResolvedApplications waits for an in-flight app setup before star
         app_id: params.appId,
         status: "running",
         detail: "ok",
-        ports: { http: params.httpPort ?? 18080, mcp: params.mcpPort ?? 13100 }
+        ports: { http: params.httpPort ?? 0, mcp: params.mcpPort ?? 0 }
       };
     },
     async stopApp() {
@@ -246,16 +241,11 @@ test("bootstrapResolvedApplications waits for an in-flight app setup before star
     appLifecycleExecutor
   });
 
-  assert.deepEqual(result, {
-    applications: [
-      {
-        app_id: "app-a",
-        mcp_url: "http://localhost:13100/mcp",
-        timeout_ms: 60000,
-        ports: { http: 18080, mcp: 13100 }
-      }
-    ]
-  });
+  assert.equal(result.applications.length, 1);
+  const app = result.applications[0]!;
+  assert.ok(app.ports.http >= 13100);
+  assert.ok(app.ports.mcp >= 13100);
+  assert.notEqual(app.ports.http, app.ports.mcp);
   assert.equal(calls.length, 1);
   assert.equal(calls[0]?.skipSetup, true);
   store.close();
@@ -335,7 +325,7 @@ test("runOpencodeAppBootstrapCli writes JSON response for a valid request", asyn
         app_id: params.appId,
         status: "running",
         detail: "ok",
-        ports: { http: params.httpPort ?? 18080, mcp: params.mcpPort ?? 13100 }
+        ports: { http: params.httpPort ?? 0, mcp: params.mcpPort ?? 0 }
       };
     },
     async stopApp() {
@@ -382,16 +372,15 @@ test("runOpencodeAppBootstrapCli writes JSON response for a valid request", asyn
 
   assert.equal(exitCode, 0);
   assert.equal(stderr, "");
-  assert.deepEqual(JSON.parse(stdout), {
-    applications: [
-      {
-        app_id: "app-a",
-        mcp_url: "http://localhost:13100/mcp",
-        timeout_ms: 60000,
-        ports: { http: 18080, mcp: 13100 }
-      }
-    ]
-  });
+  const parsed = JSON.parse(stdout);
+  assert.equal(parsed.applications.length, 1);
+  const app = parsed.applications[0];
+  assert.equal(app.app_id, "app-a");
+  assert.equal(app.timeout_ms, 60000);
+  assert.ok(app.ports.http >= 13100);
+  assert.ok(app.ports.mcp >= 13100);
+  assert.notEqual(app.ports.http, app.ports.mcp);
+  assert.equal(app.mcp_url, `http://localhost:${app.ports.mcp}/mcp`);
   store.close();
 });
 

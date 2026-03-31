@@ -49,6 +49,32 @@ export interface SessionBindingRecord {
   updatedAt: string;
 }
 
+export interface IntegrationConnectionRecord {
+  connectionId: string;
+  providerId: string;
+  ownerUserId: string;
+  accountLabel: string;
+  accountExternalId: string | null;
+  authMode: string;
+  grantedScopes: string[];
+  status: string;
+  secretRef: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface IntegrationBindingRecord {
+  bindingId: string;
+  workspaceId: string;
+  targetType: string;
+  targetId: string;
+  integrationKey: string;
+  connectionId: string;
+  isDefault: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface SessionInputRecord {
   inputId: string;
   sessionId: string;
@@ -171,6 +197,18 @@ export interface CronjobRecord {
   runCount: number;
   lastStatus: string | null;
   lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface OAuthAppConfigRecord {
+  providerId: string;
+  clientId: string;
+  clientSecret: string;
+  authorizeUrl: string;
+  tokenUrl: string;
+  scopes: string[];
+  redirectPort: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -708,6 +746,276 @@ export class RuntimeStateStore {
       createdAt: row.created_at,
       updatedAt: row.updated_at
     };
+  }
+
+  upsertIntegrationConnection(params: {
+    connectionId: string;
+    providerId: string;
+    ownerUserId: string;
+    accountLabel: string;
+    accountExternalId?: string | null;
+    authMode: string;
+    grantedScopes: string[];
+    status: string;
+    secretRef?: string | null;
+  }): IntegrationConnectionRecord {
+    const now = utcNowIso();
+    this.db()
+      .prepare(`
+        INSERT INTO integration_connections (
+            connection_id, provider_id, owner_user_id, account_label, account_external_id,
+            auth_mode, granted_scopes, status, secret_ref, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(connection_id) DO UPDATE SET
+            provider_id = excluded.provider_id,
+            owner_user_id = excluded.owner_user_id,
+            account_label = excluded.account_label,
+            account_external_id = excluded.account_external_id,
+            auth_mode = excluded.auth_mode,
+            granted_scopes = excluded.granted_scopes,
+            status = excluded.status,
+            secret_ref = excluded.secret_ref,
+            updated_at = excluded.updated_at
+      `)
+      .run(
+        params.connectionId,
+        params.providerId,
+        params.ownerUserId,
+        params.accountLabel,
+        params.accountExternalId ?? null,
+        params.authMode,
+        JSON.stringify(params.grantedScopes ?? []),
+        params.status,
+        params.secretRef ?? null,
+        now,
+        now
+      );
+    const record = this.getIntegrationConnection(params.connectionId);
+    if (!record) {
+      throw new Error("failed to load integration connection");
+    }
+    return record;
+  }
+
+  getIntegrationConnection(connectionId: string): IntegrationConnectionRecord | null {
+    const row = this.db()
+      .prepare<[string], Record<string, unknown>>(
+        "SELECT * FROM integration_connections WHERE connection_id = ? LIMIT 1"
+      )
+      .get(connectionId);
+    return row ? this.rowToIntegrationConnection(row) : null;
+  }
+
+  listIntegrationConnections(params: { providerId?: string; ownerUserId?: string } = {}): IntegrationConnectionRecord[] {
+    let query = "SELECT * FROM integration_connections";
+    const filters: string[] = [];
+    const values: string[] = [];
+    if (params.providerId) {
+      filters.push("provider_id = ?");
+      values.push(params.providerId);
+    }
+    if (params.ownerUserId) {
+      filters.push("owner_user_id = ?");
+      values.push(params.ownerUserId);
+    }
+    if (filters.length > 0) {
+      query += ` WHERE ${filters.join(" AND ")}`;
+    }
+    query += " ORDER BY datetime(created_at) ASC, connection_id ASC";
+    const rows = this.db().prepare(query).all(...values) as Array<Record<string, unknown>>;
+    return rows.map((row) => this.rowToIntegrationConnection(row));
+  }
+
+  upsertIntegrationBinding(params: {
+    bindingId: string;
+    workspaceId: string;
+    targetType: string;
+    targetId: string;
+    integrationKey: string;
+    connectionId: string;
+    isDefault: boolean;
+  }): IntegrationBindingRecord {
+    const connection = this.getIntegrationConnection(params.connectionId);
+    if (!connection) {
+      throw new Error(`integration connection ${params.connectionId} not found`);
+    }
+
+    const now = utcNowIso();
+    const existing = this.getIntegrationBindingByTarget({
+      workspaceId: params.workspaceId,
+      targetType: params.targetType,
+      targetId: params.targetId,
+      integrationKey: params.integrationKey
+    });
+
+    if (existing) {
+      this.db()
+        .prepare(`
+          UPDATE integration_bindings
+          SET binding_id = ?,
+              connection_id = ?,
+              is_default = ?,
+              updated_at = ?
+          WHERE workspace_id = ? AND target_type = ? AND target_id = ? AND integration_key = ?
+        `)
+        .run(
+          params.bindingId,
+          params.connectionId,
+          params.isDefault ? 1 : 0,
+          now,
+          params.workspaceId,
+          params.targetType,
+          params.targetId,
+          params.integrationKey
+        );
+    } else {
+      this.db()
+        .prepare(`
+          INSERT INTO integration_bindings (
+              binding_id, workspace_id, target_type, target_id, integration_key,
+              connection_id, is_default, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `)
+        .run(
+          params.bindingId,
+          params.workspaceId,
+          params.targetType,
+          params.targetId,
+          params.integrationKey,
+          params.connectionId,
+          params.isDefault ? 1 : 0,
+          now,
+          now
+        );
+    }
+
+    const record = this.getIntegrationBindingByTarget({
+      workspaceId: params.workspaceId,
+      targetType: params.targetType,
+      targetId: params.targetId,
+      integrationKey: params.integrationKey
+    });
+    if (!record) {
+      throw new Error("failed to load integration binding");
+    }
+    return record;
+  }
+
+  getIntegrationBinding(bindingId: string): IntegrationBindingRecord | null {
+    const row = this.db()
+      .prepare<[string], Record<string, unknown>>("SELECT * FROM integration_bindings WHERE binding_id = ? LIMIT 1")
+      .get(bindingId);
+    return row ? this.rowToIntegrationBinding(row) : null;
+  }
+
+  getIntegrationBindingByTarget(params: {
+    workspaceId: string;
+    targetType: string;
+    targetId: string;
+    integrationKey: string;
+  }): IntegrationBindingRecord | null {
+    const row = this.db()
+      .prepare<[string, string, string, string], Record<string, unknown>>(`
+        SELECT * FROM integration_bindings
+        WHERE workspace_id = ? AND target_type = ? AND target_id = ? AND integration_key = ?
+        LIMIT 1
+      `)
+      .get(params.workspaceId, params.targetType, params.targetId, params.integrationKey);
+    return row ? this.rowToIntegrationBinding(row) : null;
+  }
+
+  listIntegrationBindings(params: { workspaceId?: string }): IntegrationBindingRecord[] {
+    let query = "SELECT * FROM integration_bindings";
+    const values: string[] = [];
+    if (params.workspaceId) {
+      query += " WHERE workspace_id = ?";
+      values.push(params.workspaceId);
+    }
+    query += " ORDER BY is_default DESC, datetime(created_at) ASC, binding_id ASC";
+    const rows = this.db().prepare(query).all(...values) as Array<Record<string, unknown>>;
+    return rows.map((row) => this.rowToIntegrationBinding(row));
+  }
+
+  deleteIntegrationConnection(connectionId: string): boolean {
+    const result = this.db()
+      .prepare("DELETE FROM integration_connections WHERE connection_id = ?")
+      .run(connectionId);
+    return result.changes > 0;
+  }
+
+  deleteIntegrationBinding(bindingId: string): boolean {
+    const result = this.db().prepare("DELETE FROM integration_bindings WHERE binding_id = ?").run(bindingId);
+    return result.changes > 0;
+  }
+
+  upsertOAuthAppConfig(params: {
+    providerId: string;
+    clientId: string;
+    clientSecret: string;
+    authorizeUrl: string;
+    tokenUrl: string;
+    scopes: string[];
+    redirectPort?: number;
+  }): OAuthAppConfigRecord {
+    const now = utcNowIso();
+    const redirectPort = params.redirectPort ?? 38765;
+    this.db().prepare(`
+      INSERT INTO oauth_app_configs (provider_id, client_id, client_secret, authorize_url, token_url, scopes, redirect_port, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (provider_id) DO UPDATE SET
+        client_id = excluded.client_id,
+        client_secret = CASE WHEN excluded.client_secret = '' THEN oauth_app_configs.client_secret ELSE excluded.client_secret END,
+        authorize_url = excluded.authorize_url,
+        token_url = excluded.token_url,
+        scopes = excluded.scopes,
+        redirect_port = excluded.redirect_port,
+        updated_at = excluded.updated_at
+    `).run(
+      params.providerId, params.clientId, params.clientSecret,
+      params.authorizeUrl, params.tokenUrl, JSON.stringify(params.scopes),
+      redirectPort, now, now
+    );
+    const record = this.getOAuthAppConfig(params.providerId);
+    if (!record) {
+      throw new Error("failed to load OAuth app config");
+    }
+    return record;
+  }
+
+  getOAuthAppConfig(providerId: string): OAuthAppConfigRecord | null {
+    const row = this.db().prepare("SELECT * FROM oauth_app_configs WHERE provider_id = ?").get(providerId) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return {
+      providerId: row.provider_id as string,
+      clientId: row.client_id as string,
+      clientSecret: row.client_secret as string,
+      authorizeUrl: row.authorize_url as string,
+      tokenUrl: row.token_url as string,
+      scopes: JSON.parse(row.scopes as string ?? "[]") as string[],
+      redirectPort: row.redirect_port as number,
+      createdAt: row.created_at as string,
+      updatedAt: row.updated_at as string,
+    };
+  }
+
+  listOAuthAppConfigs(): OAuthAppConfigRecord[] {
+    const rows = this.db().prepare("SELECT * FROM oauth_app_configs ORDER BY provider_id").all() as Record<string, unknown>[];
+    return rows.map((row) => ({
+      providerId: row.provider_id as string,
+      clientId: row.client_id as string,
+      clientSecret: row.client_secret as string,
+      authorizeUrl: row.authorize_url as string,
+      tokenUrl: row.token_url as string,
+      scopes: JSON.parse(row.scopes as string ?? "[]") as string[],
+      redirectPort: row.redirect_port as number,
+      createdAt: row.created_at as string,
+      updatedAt: row.updated_at as string,
+    }));
+  }
+
+  deleteOAuthAppConfig(providerId: string): boolean {
+    const result = this.db().prepare("DELETE FROM oauth_app_configs WHERE provider_id = ?").run(providerId);
+    return result.changes > 0;
   }
 
   enqueueInput(params: {
@@ -1898,6 +2206,40 @@ export class RuntimeStateStore {
       CREATE INDEX IF NOT EXISTS idx_agent_runtime_sessions_workspace_updated
           ON agent_runtime_sessions (workspace_id, updated_at DESC);
 
+      CREATE TABLE IF NOT EXISTS integration_connections (
+          connection_id TEXT PRIMARY KEY,
+          provider_id TEXT NOT NULL,
+          owner_user_id TEXT NOT NULL,
+          account_label TEXT NOT NULL,
+          account_external_id TEXT,
+          auth_mode TEXT NOT NULL,
+          granted_scopes TEXT NOT NULL DEFAULT '[]',
+          status TEXT NOT NULL,
+          secret_ref TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_integration_connections_provider_owner_updated
+          ON integration_connections (provider_id, owner_user_id, updated_at DESC, created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS integration_bindings (
+          binding_id TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL,
+          target_type TEXT NOT NULL,
+          target_id TEXT NOT NULL,
+          integration_key TEXT NOT NULL,
+          connection_id TEXT NOT NULL,
+          is_default INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE (workspace_id, target_type, target_id, integration_key),
+          FOREIGN KEY (connection_id) REFERENCES integration_connections(connection_id) ON DELETE RESTRICT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_integration_bindings_workspace_updated
+          ON integration_bindings (workspace_id, is_default DESC, updated_at DESC, created_at DESC);
+
       CREATE TABLE IF NOT EXISTS agent_session_inputs (
           input_id TEXT PRIMARY KEY,
           session_id TEXT NOT NULL,
@@ -2105,6 +2447,18 @@ export class RuntimeStateStore {
 
       CREATE INDEX IF NOT EXISTS idx_cronjobs_enabled_next_run
           ON cronjobs (enabled, next_run_at);
+
+      CREATE TABLE IF NOT EXISTS oauth_app_configs (
+          provider_id TEXT PRIMARY KEY,
+          client_id TEXT NOT NULL,
+          client_secret TEXT NOT NULL,
+          authorize_url TEXT NOT NULL,
+          token_url TEXT NOT NULL,
+          scopes TEXT NOT NULL DEFAULT '[]',
+          redirect_port INTEGER NOT NULL DEFAULT 38765,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+      );
     `);
   }
 
@@ -2556,6 +2910,36 @@ export class RuntimeStateStore {
       leaseUntil: row.lease_until == null ? null : String(row.lease_until),
       heartbeatAt: row.heartbeat_at == null ? null : String(row.heartbeat_at),
       lastError: this.parseJsonObjectOrMessage(row.last_error),
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at)
+    };
+  }
+
+  private rowToIntegrationConnection(row: Record<string, unknown>): IntegrationConnectionRecord {
+    return {
+      connectionId: String(row.connection_id),
+      providerId: String(row.provider_id),
+      ownerUserId: String(row.owner_user_id),
+      accountLabel: String(row.account_label),
+      accountExternalId: row.account_external_id == null ? null : String(row.account_external_id),
+      authMode: String(row.auth_mode),
+      grantedScopes: this.parseJsonList(row.granted_scopes).filter((item): item is string => typeof item === "string"),
+      status: String(row.status),
+      secretRef: row.secret_ref == null ? null : String(row.secret_ref),
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at)
+    };
+  }
+
+  private rowToIntegrationBinding(row: Record<string, unknown>): IntegrationBindingRecord {
+    return {
+      bindingId: String(row.binding_id),
+      workspaceId: String(row.workspace_id),
+      targetType: String(row.target_type),
+      targetId: String(row.target_id),
+      integrationKey: String(row.integration_key),
+      connectionId: String(row.connection_id),
+      isDefault: Boolean(Number(row.is_default)),
       createdAt: String(row.created_at),
       updatedAt: String(row.updated_at)
     };

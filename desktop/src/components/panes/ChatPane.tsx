@@ -1,6 +1,6 @@
 import { type ChangeEvent, type DragEvent, FormEvent, KeyboardEvent, type RefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { AlertTriangle, ArrowUp, Bot, Check, ChevronDown, Clock3, FileText, Image as ImageIcon, Loader2, Paperclip, X } from "lucide-react";
+import { AlertTriangle, ArrowUp, Bot, Cable, Check, ChevronDown, Clock3, FileText, Image as ImageIcon, Loader2, Paperclip, X } from "lucide-react";
 import { PaneCard } from "@/components/ui/PaneCard";
 import {
   EXPLORER_ATTACHMENT_DRAG_TYPE,
@@ -407,6 +407,43 @@ function inputIdFromMessageId(messageId: string, role: "user" | "assistant") {
   return messageId.startsWith(prefix) ? messageId.slice(prefix.length) : "";
 }
 
+function extractMcpErrorText(result: unknown): string {
+  if (!isRecord(result) || result.isError !== true) {
+    return "";
+  }
+  const content = Array.isArray(result.content) ? result.content : [];
+  for (const part of content) {
+    if (isRecord(part) && part.type === "text" && typeof part.text === "string") {
+      const text = part.text.trim();
+      if (text) {
+        return text.length > 200 ? `${text.slice(0, 197).trimEnd()}...` : text;
+      }
+    }
+  }
+  return "";
+}
+
+function isIntegrationError(text: string): { provider: string; action: string } | null {
+  const patterns: Array<{ pattern: RegExp; provider: string }> = [
+    { pattern: /no\s+google\s+token/i, provider: "Google" },
+    { pattern: /no\s+github\s+token/i, provider: "GitHub" },
+    { pattern: /no\s+reddit\s+token/i, provider: "Reddit" },
+    { pattern: /no\s+twitter\s+token/i, provider: "Twitter" },
+    { pattern: /no\s+linkedin\s+token/i, provider: "LinkedIn" },
+    { pattern: /PLATFORM_INTEGRATION_TOKEN/i, provider: "" },
+    { pattern: /integration.*not.*connected/i, provider: "" },
+    { pattern: /integration.*not.*bound/i, provider: "" },
+    { pattern: /connect\s+via\s+(settings|integrations)/i, provider: "" },
+  ];
+  for (const { pattern, provider } of patterns) {
+    if (pattern.test(text)) {
+      const resolved = provider || "this provider";
+      return { provider: resolved, action: `Connect ${resolved} in the Integrations tab` };
+    }
+  }
+  return null;
+}
+
 function toolTraceStepFromPayload(payload: Record<string, unknown>, order: number): ChatTraceStep | null {
   const stepId = toolTraceStepId(payload);
   const toolName = typeof payload.tool_name === "string" ? payload.tool_name.trim() : "";
@@ -417,10 +454,12 @@ function toolTraceStepFromPayload(payload: Record<string, unknown>, order: numbe
     return null;
   }
 
+  const isError = payload.error === true || phase === "error";
   const details: string[] = [];
   const argsSummary = summarizeUnknown(payload.tool_args);
   const resultSummary = summarizeUnknown(payload.result);
   const errorSummary = summarizeUnknown(payload.error);
+  const mcpErrorText = extractMcpErrorText(payload.result);
 
   if (phase === "started") {
     details.push("Tool call started.");
@@ -428,11 +467,18 @@ function toolTraceStepFromPayload(payload: Record<string, unknown>, order: numbe
       details.push(`Inputs: ${argsSummary}`);
     }
   } else if (TOOL_TRACE_TERMINAL_PHASES.has(phase)) {
-    details.push(payload.error ? "Tool call returned an error." : "Tool call completed.");
-    if (resultSummary) {
+    if (isError && mcpErrorText) {
+      details.push(mcpErrorText);
+    } else if (isError) {
+      details.push("Tool call returned an error.");
+      if (errorSummary && errorSummary !== "true" && errorSummary !== "false") {
+        details.push(`Error: ${errorSummary}`);
+      }
+    } else {
+      details.push("Tool call completed.");
+    }
+    if (!isError && resultSummary) {
       details.push(`Result: ${resultSummary}`);
-    } else if (errorSummary && errorSummary !== "false") {
-      details.push(`Error: ${errorSummary}`);
     }
   } else if (argsSummary) {
     details.push(`Inputs: ${argsSummary}`);
@@ -442,7 +488,7 @@ function toolTraceStepFromPayload(payload: Record<string, unknown>, order: numbe
     id: stepId,
     kind: "tool",
     title: label,
-    status: payload.error ? "error" : TOOL_TRACE_TERMINAL_PHASES.has(phase) ? "completed" : "running",
+    status: isError ? "error" : TOOL_TRACE_TERMINAL_PHASES.has(phase) ? "completed" : "running",
     details,
     order
   };
@@ -3131,6 +3177,18 @@ function isTraceStepCollapsed(step: ChatTraceStep, collapsedTraceByStepId: Recor
   return collapsedTraceByStepId[step.id] ?? true;
 }
 
+function IntegrationErrorBanner({ details }: { details: string[] }) {
+  const errorText = details.join(" ");
+  const integrationError = isIntegrationError(errorText);
+  if (!integrationError) return null;
+  return (
+    <div className="mt-1.5 flex items-center gap-2 rounded-[10px] border border-amber-400/20 bg-amber-400/6 px-2.5 py-1.5 text-[11px] text-amber-400/90">
+      <Cable size={12} className="shrink-0" />
+      <span>{integrationError.action}</span>
+    </div>
+  );
+}
+
 function TraceStepCard({
   step,
   collapsed,
@@ -3192,6 +3250,7 @@ function TraceStepCard({
               {step.details.join("\n")}
             </div>
           ) : null}
+          {step.status === "error" ? <IntegrationErrorBanner details={step.details} /> : null}
         </div>
 
         {step.details.length > 0 ? (

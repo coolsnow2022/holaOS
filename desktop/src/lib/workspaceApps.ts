@@ -8,10 +8,17 @@ export interface WorkspaceAppDefinition {
 export interface WorkspaceInstalledAppDefinition extends WorkspaceAppDefinition {
   configPath: string;
   lifecycle: InstalledWorkspaceAppPayload["lifecycle"];
-  buildStatus: InstalledWorkspaceAppPayload["build_status"];
+  ready: boolean;
+  error: string | null;
 }
 
 const APP_CATALOG: Record<string, WorkspaceAppDefinition> = {
+  gmail: {
+    id: "gmail",
+    label: "Gmail",
+    summary: "Email drafts and sending. Use the agent to search threads, draft replies, and keep context in one place.",
+    accentClassName: "bg-rose-300/80"
+  },
   twitter: {
     id: "twitter",
     label: "Twitter",
@@ -72,7 +79,8 @@ export function hydrateInstalledWorkspaceApps(
       ...catalogEntry,
       configPath: app.config_path,
       lifecycle: app.lifecycle,
-      buildStatus: app.build_status
+      ready: app.ready,
+      error: app.error ?? null
     };
   });
 }
