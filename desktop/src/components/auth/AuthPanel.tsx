@@ -817,21 +817,26 @@ export function AuthPanel({ view = "full" }: AuthPanelProps) {
                   <span className="grid h-9 w-9 shrink-0 place-items-center rounded-[12px] border border-panel-border/35 bg-black/14 text-text-main/86">
                     <ProviderBrandIcon providerId={providerId} />
                   </span>
-                  <div className="min-w-0">
-                    <div className="text-[13px] font-medium text-text-main">{template.label}</div>
-                    <div className="mt-0.5 text-[11px] text-text-muted/72">
-                      {isHolabossProvider ? "Sign in required" : template.description}
-                    </div>
+                <div className="min-w-0">
+                  <div className="text-[13px] font-medium text-text-main">{template.label}</div>
+                  <div className="mt-0.5 text-[11px] text-text-muted/72">
+                    {isHolabossProvider ? "Sign in required" : template.description}
                   </div>
                 </div>
-                {isHolabossProvider ? (
-                  <div className="rounded-full border border-panel-border/45 bg-black/12 px-3 py-1 text-[10px] uppercase tracking-[0.14em] text-text-dim/72">
-                    Disabled
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => updateProviderDraft(providerId, { enabled: true })}
+              </div>
+              {isHolabossProvider ? (
+                <button
+                  type="button"
+                  onClick={() => void handleStartSignIn()}
+                  disabled={isStartingSignIn}
+                  className="rounded-[10px] border border-neon-green/40 bg-neon-green/10 px-3 py-1.5 text-[11px] text-neon-green transition hover:bg-neon-green/16 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isStartingSignIn ? "Opening..." : "Sign in"}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => updateProviderDraft(providerId, { enabled: true })}
                     className="rounded-[10px] border border-panel-border/45 px-3 py-1.5 text-[11px] text-text-main transition hover:border-neon-green/35 hover:text-neon-green"
                   >
                     Connect
