@@ -6238,14 +6238,16 @@ async function requestRuntimeJson<T>({
   payload,
   params,
   timeoutMs,
+  retryTransientErrors = false,
 }: {
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   path: string;
   payload?: unknown;
   params?: Record<string, string | number | boolean | null | undefined>;
   timeoutMs?: number;
+  retryTransientErrors?: boolean;
 }): Promise<T> {
-  const attempts = method === "GET" ? 3 : 1;
+  const attempts = method === "GET" || retryTransientErrors ? 3 : 1;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       const status = await ensureRuntimeReady();
@@ -6943,6 +6945,7 @@ async function activateWorkspace(
     path: "/api/v1/apps/ensure-running",
     payload: { workspace_id: workspaceId },
     timeoutMs: 300000,
+    retryTransientErrors: true,
   });
   return getWorkspaceLifecycleViaRuntime(workspaceId);
 }
