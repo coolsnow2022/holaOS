@@ -178,7 +178,7 @@ Notes:
 
 ### Signed CI Release
 
-The macOS release job in `.github/workflows/publish-runtime-bundles.yml` will build a signed and notarized DMG when these repository secrets are present:
+The macOS release job in `.github/workflows/publish-runtime-bundles.yml` requires these repository secrets and fails fast when any of them are missing:
 
 - `MAC_CERTIFICATE`: base64-encoded `Developer ID Application` `.p12`
 - `MAC_CERTIFICATE_PASSWORD`: password for the `.p12`
