@@ -46,7 +46,7 @@ Holaboss enables you to build AI workers that go beyond one-off task executionâ€
   - [Prerequisites](#prerequisites)
   - [One-Line Agent Setup](#one-line-agent-setup)
   - [Quick start](#quick-start)
-- [Worker Development Kit](#worker-development-kit)
+- [Workspace Structure](#workspace-structure)
 - [AI Labour Market](#ai-labour-market)
 - [Capability Hub](#capability-hub)
   - [Apps and Integrations](#apps-and-integrations)
@@ -77,10 +77,10 @@ Holaboss enables you to build AI workers that go beyond one-off task executionâ€
 If you use Codex, Claude Code, Cursor, Windsurf, or another coding agent, you can hand it the setup instructions in one sentence:
 
 ```text
-Help me clone Holaboss OSS if needed, then bootstrap it for local desktop development by following INSTALL.md in the repo. Verify Node.js 22+, create desktop/.env from desktop/.env.example, run npm run desktop:install, npm run desktop:prepare-runtime:local, npm run desktop:typecheck, and only then launch npm run desktop:dev. If the environment cannot open Electron, stop after verification and tell me the next manual step.
+Clone the Holaboss repo from https://github.com/holaboss-ai/holaboss-ai.git if needed, or use the current checkout if it is already open, then follow INSTALL.md exactly to bootstrap local desktop development. If the environment cannot open Electron, stop after verification and tell me the next manual step.
 ```
 
-That prompt is meant for coding agents. It mirrors the baseline desktop quick start, tells the agent to follow the repo-local installation runbook in `INSTALL.md`, complete the non-interactive verification steps first, and avoid getting stuck trying to open a GUI in a headless environment.
+That prompt is meant for coding agents. It stays self-contained by naming the repo and clone URL, while leaving the actual installation details in the repo-local `INSTALL.md` runbook.
 
 ### Quick start
 
@@ -116,15 +116,55 @@ If you want to stage the latest released runtime bundle for your current host pl
 npm run desktop:prepare-runtime
 ```
 
-## Worker Development Kit
+## Workspace Structure
 
-Holaboss OSS already ships the core building blocks for developing portable AI workers:
+Holaboss workspaces live under the runtime sandbox root. In the desktop app, that root is the local `sandbox-host` data directory; in standalone runtime deploys it defaults to `/holaboss`.
 
-- Desktop workspace surfaces for agent work, marketplace browsing, automations, skills, integrations, and workspace apps.
-- Portable runtime bundle tooling under `runtime/deploy/` for packaging standalone macOS and Linux runtime bundles.
-- Workspace apps that can be installed, started, stopped, set up, and managed through the runtime API.
-- Workspace and embedded skills loaded from `SKILL.md`-based skill folders.
-- MCP-aware runtime execution that can stage workspace skills, resolve MCP servers, and expose runtime tools such as onboarding and cronjob helpers.
+```text
+<sandbox-root>/
+  state/
+    runtime-config.json
+    runtime.db
+
+  workspace/
+    .holaboss/
+      workspace-mcp-sidecar-state.json
+      <server>.workspace-mcp-sidecar.stdout.log
+      <server>.workspace-mcp-sidecar.stderr.log
+
+    <workspace-id>/
+      AGENTS.md
+      workspace.yaml
+      ONBOARD.md
+      skills/
+        <skill-id>/
+          SKILL.md
+      apps/
+        <app-id>/
+          app.runtime.yaml
+      .holaboss/
+        workspace_id
+        harness-session-state.json
+        input-attachments/<batch-id>/*
+        pi-agent/auth.json
+        pi-agent/models.json
+        pi-sessions/...
+      ...
+
+  memory/
+    workspace/<workspace-id>/*.md
+    preference/*.md
+    ...
+```
+
+- `workspace.yaml` is the root runtime plan for the workspace. It defines the single active agent, local skills path, MCP registry, and any installed workspace apps.
+- `AGENTS.md` is the root prompt file. Workspace instructions are expected there rather than inline in `workspace.yaml`.
+- `skills/` contains workspace-local skills, with one folder per skill and a required `SKILL.md` file in each skill directory.
+- `apps/` contains workspace-local apps. Each installed app lives under `apps/<app-id>/` and must provide `app.runtime.yaml`.
+- `<workspace-id>/.holaboss/` stores runtime-managed workspace state such as the identity marker, persisted harness session mapping, staged input attachments, and Pi harness state.
+- `workspace/.holaboss/` is separate from the per-workspace `.holaboss/` directory. It stores shared workspace-root state for MCP sidecars and their logs.
+- `state/runtime.db` is the durable runtime registry for workspaces, sessions, bindings, and queue state. The `workspace_id` file exists mainly as an on-disk identity marker for workspace discovery and migration.
+- `memory/` is sandbox-global, not inside a single workspace directory. It stores workspace-scoped and user-scoped markdown memory files used by the runtime memory service.
 
 ## AI Labour Market
 
@@ -260,36 +300,25 @@ npm run runtime:test
 
 ## Model Configuration
 
-The app ships with a default model setup. This section only covers how to override it with your own model configuration.
+The app ships with a default model setup. In most cases, you do not need to edit `runtime-config.json` by hand.
 
 - default model: `openai/gpt-5.4`
 - default provider id for unprefixed models: `openai`
 
+### In-App Setup
+
+Holaboss already provides model configuration in the desktop app.
+
+- Open `Settings` -> `Model Providers`.
+- Connect a provider such as OpenAI, Anthropic, OpenRouter, Gemini, or Ollama.
+- Enter your API key and use the built-in provider defaults or edit the model list for that provider.
+- Changes autosave to `runtime-config.json`, and the chat model picker will use the configured provider models.
+
 ### Customization Mode
 
-#### Your Own Proxy
+#### Provider Configurations
 
-You can point the runtime at your own proxy.
-
-- set `model_proxy_base_url` to your proxy root
-- set `auth_token` to the token your proxy expects
-- set `sandbox_id`
-- set `default_model` to the model you want to use
-
-Important behavior:
-
-- for OpenAI-compatible models, the runtime uses `<base>/openai/v1`
-- for Anthropic models, the runtime uses `<base>/anthropic/v1`
-- the runtime passes `X-API-Key` and `X-Holaboss-Sandbox-Id`
-- OpenCode provider config also persists `X-Holaboss-User-Id` when available
-
-So a custom proxy is a good fit when it accepts that header contract directly, or at least safely ignores the extra Holaboss-specific headers.
-
-One implementation detail: the internal provider key in `runtime-config.json` remains `holaboss_model_proxy` even when you point it at your own proxy.
-
-#### Direct Provider Endpoint (No Proxy Rewriter)
-
-You can also route directly to a provider endpoint (for example OpenAI) without a model-proxy rewriter.
+You can route the runtime directly to a provider endpoint (for example OpenAI) without a model-proxy rewriter.
 
 - set `model_proxy_base_url` to the provider API base, for example `https://api.openai.com/v1`
 - set `auth_token` to your provider API key
