@@ -35,7 +35,7 @@ export function MarketplaceGallery({
   const branding = marketplaceGalleryBranding(mode);
 
   const effectiveTemplates =
-    authenticated && templates.length > 0 ? templates : FALLBACK_TEMPLATES;
+    templates.length > 0 ? templates : FALLBACK_TEMPLATES;
 
   const visibleTemplates = useMemo(() => {
     let available = effectiveTemplates.filter(
@@ -94,7 +94,7 @@ export function MarketplaceGallery({
         <Input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search kits by name or tag"
+          placeholder="Search workers by name or tag"
           className="h-9 pl-8"
         />
       </div>
@@ -140,8 +140,8 @@ export function MarketplaceGallery({
         ) : visibleTemplates.length === 0 ? (
           <div className="rounded-xl border border-border bg-muted/50 px-4 py-5 text-xs text-muted-foreground">
             {query.trim()
-              ? "No kits match your search."
-              : "No kits available yet."}
+              ? "No workers match your search."
+              : "No workers available yet."}
           </div>
         ) : (
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">

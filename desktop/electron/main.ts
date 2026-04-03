@@ -5083,6 +5083,21 @@ async function parseLocalTemplateMetadata(
 }
 
 async function listMarketplaceTemplates(): Promise<TemplateListResponsePayload> {
+  // Try unauthenticated fetch first — the templates endpoint is public.
+  const baseUrl = marketplaceBaseUrl();
+  try {
+    const res = await fetch(`${baseUrl}/api/v1/marketplace/templates`, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+    });
+    if (res.ok) {
+      return (await res.json()) as TemplateListResponsePayload;
+    }
+  } catch {
+    // Fall through to authenticated path.
+  }
+
+  // Fallback: authenticated path (e.g. if public access is disabled).
   await ensureRuntimeBindingReadyForWorkspaceFlow("marketplace_templates", {
     allowProvisionWhenUnmanaged: true,
     waitForStartupSync: true,
@@ -12754,7 +12769,14 @@ app.whenReady().then(async () => {
         method: "POST",
         path: "/api/v1/marketplace/submissions/create",
         payload: {
-          ...payload,
+          workspace_id: payload.workspaceId,
+          name: payload.name,
+          description: payload.description,
+          category: payload.category,
+          tags: payload.tags,
+          apps: payload.apps,
+          onboarding_md: payload.onboardingMd,
+          readme_md: payload.readmeMd,
           holaboss_user_id: holabossUserId,
         },
       });
