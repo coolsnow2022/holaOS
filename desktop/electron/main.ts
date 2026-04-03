@@ -13,6 +13,7 @@ import {
   nativeImage,
   screen,
   session,
+  net,
   shell,
   type IpcMainInvokeEvent,
   type OpenDialogOptions,
@@ -1433,6 +1434,26 @@ interface WorkspaceListResponsePayload {
   offset: number;
 }
 
+interface SubmissionListResponsePayload {
+  submissions: Array<{
+    id: string;
+    author_id: string;
+    author_name: string;
+    template_name: string;
+    template_id: string;
+    version: string;
+    status: "pending_review" | "published" | "rejected";
+    manifest: Record<string, unknown>;
+    archive_size_bytes: number;
+    review_notes: string | null;
+    reviewed_by: string | null;
+    reviewed_at: string | null;
+    created_at: string;
+    updated_at: string;
+  }>;
+  count: number;
+}
+
 interface TaskProposalRecordPayload {
   proposal_id: string;
   workspace_id: string;
@@ -1798,7 +1819,6 @@ interface EnqueueSessionInputResponsePayload {
 interface HolabossClientConfigPayload {
   projectsUrl: string;
   marketplaceUrl: string;
-  hasApiKey: boolean;
 }
 
 interface DesktopBillingOverviewPayload {
@@ -4822,63 +4842,33 @@ async function syncPersistedAuthSessionOnStartup(): Promise<void> {
   }
 }
 
+function gatewayBaseUrl(service: string): string {
+  return `${AUTH_BASE_URL.replace(/\/+$/, "")}/gateway/${service}`;
+}
+
 function projectsBaseUrl() {
-  return DEFAULT_PROJECTS_URL.replace(/\/+$/, "");
+  return AUTH_BASE_URL ? gatewayBaseUrl("projects") : DEFAULT_PROJECTS_URL.replace(/\/+$/, "");
 }
 
 function marketplaceBaseUrl() {
-  return DEFAULT_MARKETPLACE_URL.replace(/\/+$/, "");
-}
-
-function controlPlaneApiKey() {
-  const value =
-    process.env.HOLA_AGENT_API_KEY?.trim() ||
-    process.env.HOLABOSS_API_KEY?.trim();
-  return value || null;
+  return AUTH_BASE_URL ? gatewayBaseUrl("marketplace") : DEFAULT_MARKETPLACE_URL.replace(/\/+$/, "");
 }
 
 async function controlPlaneHeaders(
-  service: "projects" | "marketplace" | "proactive",
+  _service: "projects" | "marketplace" | "proactive",
   extraHeaders?: Record<string, string>,
 ): Promise<Record<string, string>> {
-  if (service === "marketplace" || service === "proactive") {
-    const runtimeConfig = await readRuntimeConfigFile();
-    const runtimeToken = runtimeModelProxyApiKeyFromConfig(runtimeConfig);
-    if (runtimeToken) {
-      const sandboxId = (runtimeConfig.sandbox_id || "").trim();
-      const userId = (runtimeConfig.user_id || "").trim();
-      return {
-        "Content-Type": "application/json",
-        "X-API-Key": runtimeToken,
-        ...(sandboxId ? { "X-Holaboss-Sandbox-Id": sandboxId } : {}),
-        ...(userId ? { "X-Holaboss-User-Id": userId } : {}),
-        ...extraHeaders,
-      };
-    }
-  }
-
-  if (service === "marketplace" || service === "proactive") {
-    throw new Error(
-      `${service === "marketplace" ? "Marketplace" : "Proactive"} auth is missing. Sign in to provision a runtime binding token.`,
-    );
-  }
-
-  const apiKey = controlPlaneApiKey();
-  if (apiKey) {
-    return {
-      "Content-Type": "application/json",
-      "X-API-Key": apiKey,
-      ...extraHeaders,
-    };
-  }
-
-  throw new Error(
-    "Projects API key is missing. Set HOLA_AGENT_API_KEY or HOLABOSS_API_KEY in the desktop app environment.",
-  );
+  // All services route through the Hono gateway which adds the API key.
+  // No Cookie header — it triggers CORS preflight in Electron's fetch.
+  // User identity is passed via holaboss_user_id in request params/body.
+  return {
+    "Content-Type": "application/json",
+    ...extraHeaders,
+  };
 }
 
 function proactiveBaseUrl() {
-  return DEFAULT_PROACTIVE_URL.replace(/\/+$/, "");
+  return AUTH_BASE_URL ? gatewayBaseUrl("proactive") : DEFAULT_PROACTIVE_URL.replace(/\/+$/, "");
 }
 
 function embeddedRuntimeStartupConfigError() {
@@ -4943,7 +4933,7 @@ async function requestControlPlaneJson<T>({
   }
 
   const executeRequest = async () => {
-    return fetch(url, {
+    return net.fetch(url.toString(), {
       method,
       headers: await controlPlaneHeaders(service),
       body: payload === undefined ? undefined : JSON.stringify(payload),
@@ -4999,7 +4989,23 @@ async function requestControlPlaneJson<T>({
     return null as T;
   }
 
-  return response.json() as Promise<T>;
+  const text = await response.text();
+  if (!text.trim()) {
+    const hdrs = Object.fromEntries(response.headers.entries());
+    console.error(
+      `[control-plane] Empty response: ${method} ${url.toString()} → status=${response.status} headers=${JSON.stringify(hdrs)}`,
+    );
+    throw new Error(
+      `Empty response from ${service} ${method} ${requestPath} (status ${response.status})`,
+    );
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error(
+      `Invalid JSON from ${service} ${method} ${requestPath} (status ${response.status}): ${text.slice(0, 200)}`,
+    );
+  }
 }
 
 async function emitWorkspaceReadyHeartbeat(params: {
@@ -5074,7 +5080,6 @@ function getHolabossClientConfig(): HolabossClientConfigPayload {
   return {
     projectsUrl: projectsBaseUrl(),
     marketplaceUrl: marketplaceBaseUrl(),
-    hasApiKey: Boolean(controlPlaneApiKey()),
   };
 }
 
@@ -7303,19 +7308,20 @@ async function removeInstalledApp(
 }
 
 async function controlPlaneWorkspaceUserId(): Promise<string | null> {
-  if (!controlPlaneApiKey()) {
-    return null;
-  }
+  // Check runtime config first — populated during binding provisioning.
   const runtimeConfig = await readRuntimeConfigFile();
   const runtimeUserId = (runtimeConfig.user_id || "").trim();
   if (runtimeUserId && runtimeUserId !== LOCAL_OSS_TEMPLATE_USER_ID) {
     return runtimeUserId;
   }
 
+  // Fall back to authenticated user.
   const authenticatedUser = await getAuthenticatedUser().catch(() => null);
   const authId = authenticatedUser ? authUserId(authenticatedUser) : "";
   return authId.trim() || null;
 }
+
+
 
 function workspaceReadinessFromApps(apps: InstalledWorkspaceAppPayload[]) {
   const blockingApps = apps
@@ -7876,7 +7882,6 @@ async function createWorkspace(
   if (templateMode !== "empty" && !templateRootPath && templateName) {
     const holabossUserId = (payload.holaboss_user_id || "").trim();
     if (
-      controlPlaneApiKey() &&
       holabossUserId &&
       holabossUserId !== LOCAL_OSS_TEMPLATE_USER_ID
     ) {
@@ -12986,6 +12991,21 @@ app.whenReady().then(async () => {
           category: params.category,
           tags: params.tags,
           apps: params.apps,
+        },
+      });
+    },
+  );
+  handleTrustedIpc(
+    "workspace:listSubmissions",
+    ["main"],
+    async () => {
+      const authorId = await controlPlaneWorkspaceUserId();
+      return requestControlPlaneJson<SubmissionListResponsePayload>({
+        service: "marketplace",
+        method: "GET",
+        path: "/api/v1/marketplace/submissions",
+        params: {
+          author_id: authorId,
         },
       });
     },
