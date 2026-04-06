@@ -2,9 +2,9 @@ import archiver from "archiver";
 import { existsSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createWriteStream } from "node:fs";
-import { request as httpsRequest } from "node:https";
 import { request as httpRequest } from "node:http";
 import type { IncomingMessage } from "node:http";
+import { request as httpsRequest } from "node:https";
 import path from "node:path";
 import { Writable } from "node:stream";
 
@@ -177,8 +177,10 @@ function isHbIgnored(relPath: string, hbPatterns: string[]): boolean {
 }
 
 function parseSignedHeaderNames(url: string): string[] {
-  const signedHeaders = new URL(url).searchParams.get("X-Amz-SignedHeaders") ??
-    new URL(url).searchParams.get("x-amz-signedheaders") ??
+  const params = new URL(url).searchParams;
+  const signedHeaders =
+    params.get("X-Amz-SignedHeaders") ??
+    params.get("x-amz-signedheaders") ??
     "";
   return signedHeaders
     .split(";")
@@ -375,11 +377,6 @@ export async function uploadToPresignedUrl(
   data: Buffer,
   timeoutMs = 120_000,
 ): Promise<void> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => {
-    controller.abort(new Error(`Upload timed out after ${timeoutMs}ms`));
-  }, timeoutMs);
-
   const requester = url.startsWith("https") ? httpsRequest : httpRequest;
 
   await new Promise<void>((resolve, reject) => {
@@ -387,15 +384,15 @@ export async function uploadToPresignedUrl(
       url,
       {
         method: "PUT",
-        headers: {
-          "Content-Type": "application/zip",
-          "Content-Length": data.byteLength,
-        },
+        headers: buildPresignedUploadHeaders(url, data.byteLength),
         timeout: timeoutMs,
       },
       (res: IncomingMessage) => {
-        // Drain response body
-        res.resume();
+        const responseChunks: string[] = [];
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => {
+          responseChunks.push(chunk);
+        });
         res.on("end", () => {
           const status = res.statusCode ?? 0;
           if (status >= 200 && status < 300) {
@@ -403,13 +400,17 @@ export async function uploadToPresignedUrl(
           } else {
             reject(
               new Error(
-                `Presigned URL upload failed with status ${status}`
-              )
+                buildPresignedUploadError(
+                  url,
+                  status,
+                  responseChunks.join(""),
+                ),
+              ),
             );
           }
         });
         res.on("error", reject);
-      }
+      },
     );
 
     req.on("timeout", () => {

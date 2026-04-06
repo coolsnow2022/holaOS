@@ -8285,15 +8285,15 @@ async function deleteWorkspace(
       service: "projects",
       method: "DELETE",
       path: `/api/v1/projects/workspaces/${encodeURIComponent(workspaceId)}`,
-    }).catch(() => {
-      // Ignore control-plane errors — workspace may already be gone remotely.
+    }).catch((err: unknown) => {
+      console.warn("[deleteWorkspace] control-plane delete failed (may already be gone):", err);
     });
     // Also try cleaning up local runtime state (best-effort).
     await requestRuntimeJson<WorkspaceResponsePayload>({
       method: "DELETE",
       path: `/api/v1/workspaces/${encodeURIComponent(workspaceId)}`,
-    }).catch(() => {
-      // Local runtime may not have this workspace — that's fine.
+    }).catch((err: unknown) => {
+      console.warn("[deleteWorkspace] local runtime delete failed (may not exist locally):", err);
     });
     return {
       workspace: {
@@ -8402,7 +8402,10 @@ async function getSessionHistory(
       },
     });
   } catch (error) {
-    if (isMissingSessionBindingError(error) || isWorkspaceNotFoundError(error)) {
+    if (
+      isMissingSessionBindingError(error) ||
+      isWorkspaceNotFoundError(error)
+    ) {
       return emptySessionHistoryPayload(sessionId, workspaceId);
     }
     throw error;
@@ -13100,7 +13103,8 @@ app.whenReady().then(async () => {
       },
     ) => {
       try {
-        const { packageWorkspace, uploadToPresignedUrl } = await import("./workspace-packager.js");
+        const { packageWorkspace, uploadToPresignedUrl } =
+          await import("./workspace-packager.js");
         const workspaceDir = workspaceDirectoryPath(params.workspaceId);
         const result = await packageWorkspace({
           workspaceDir,
