@@ -26,7 +26,7 @@ import {
 } from "electron";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import {
   createServer,
@@ -706,6 +706,7 @@ function configureStableUserDataPath() {
   const nextUserDataPath = explicit
     ? path.resolve(explicit)
     : path.join(app.getPath("appData"), DESKTOP_USER_DATA_DIR);
+  mkdirSync(nextUserDataPath, { recursive: true });
   if (app.getPath("userData") !== nextUserDataPath) {
     app.setPath("userData", nextUserDataPath);
   }
