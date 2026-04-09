@@ -41,8 +41,9 @@ import {
 } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { URL } from "node:url";
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
 import { ensureWorkspaceGitRepo } from "./workspace-git.js";
@@ -84,7 +85,7 @@ const APP_THEMES = new Set([
 const GITHUB_RELEASES_OWNER = "holaboss-ai";
 const GITHUB_RELEASES_REPO = "holaboss-ai";
 const APP_UPDATE_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000;
-const APP_UPDATE_SUPPORTED_PLATFORMS = new Set(["darwin"]);
+const APP_UPDATE_SUPPORTED_PLATFORMS = new Set(["darwin", "win32"]);
 const LOCAL_OSS_TEMPLATE_USER_ID = "local-oss";
 const HOLABOSS_HOME_URL = "https://www.holaboss.ai";
 const HOLABOSS_DOCS_URL = `https://github.com/${GITHUB_RELEASES_OWNER}/${GITHUB_RELEASES_REPO}`;
@@ -1757,7 +1758,6 @@ interface WorkspaceRecordPayload {
   name: string;
   status: string;
   harness: string | null;
-  main_session_id: string | null;
   error_message: string | null;
   onboarding_status: string;
   onboarding_session_id: string | null;
@@ -2185,8 +2185,6 @@ interface SessionHistoryResponsePayload {
   harness: string;
   harness_session_id: string;
   source: string;
-  main_session_id: string | null;
-  is_main_session: boolean;
   messages: SessionHistoryMessagePayload[];
   count: number;
   total: number;
@@ -2688,7 +2686,6 @@ function migrateLocalWorkspacesTable(database: Database.Database) {
       name TEXT NOT NULL,
       status TEXT NOT NULL,
       harness TEXT,
-      main_session_id TEXT,
       error_message TEXT,
       onboarding_status TEXT NOT NULL,
       onboarding_session_id TEXT,
@@ -2706,7 +2703,6 @@ function migrateLocalWorkspacesTable(database: Database.Database) {
       name,
       status,
       harness,
-      main_session_id,
       error_message,
       onboarding_status,
       onboarding_session_id,
@@ -2723,7 +2719,6 @@ function migrateLocalWorkspacesTable(database: Database.Database) {
       name,
       status,
       harness,
-      main_session_id,
       error_message,
       onboarding_status,
       onboarding_session_id,
@@ -2841,7 +2836,6 @@ async function bootstrapRuntimeDatabase() {
         name TEXT NOT NULL,
         status TEXT NOT NULL,
         harness TEXT,
-        main_session_id TEXT,
         error_message TEXT,
         onboarding_status TEXT NOT NULL,
         onboarding_session_id TEXT,
@@ -8871,7 +8865,6 @@ function getWorkspaceRecord(
           name,
           status,
           harness,
-          main_session_id,
           error_message,
           onboarding_status,
           onboarding_session_id,
@@ -9485,7 +9478,6 @@ function renderEmptyOnboardingGuide() {
 async function createWorkspace(
   payload: HolabossCreateWorkspacePayload,
 ): Promise<WorkspaceResponsePayload> {
-  const mainSessionId = crypto.randomUUID();
   const harness = normalizeRequestedWorkspaceHarness(payload.harness);
   const templateMode = requestedWorkspaceTemplateMode(payload);
   const templateRootPath = payload.template_root_path?.trim() || "";
@@ -9544,7 +9536,6 @@ async function createWorkspace(
         name: payload.name,
         harness,
         status: "provisioning",
-        main_session_id: mainSessionId,
         onboarding_status: "not_required",
       },
     });
@@ -9805,6 +9796,23 @@ async function listAgentSessions(
   });
 }
 
+async function createAgentSession(
+  payload: CreateAgentSessionPayload,
+): Promise<CreateAgentSessionResponsePayload> {
+  return requestRuntimeJson<CreateAgentSessionResponsePayload>({
+    method: "POST",
+    path: "/api/v1/agent-sessions",
+    payload: {
+      workspace_id: payload.workspace_id,
+      session_id: payload.session_id ?? undefined,
+      kind: payload.kind ?? undefined,
+      title: payload.title ?? undefined,
+      parent_session_id: payload.parent_session_id ?? undefined,
+      created_by: payload.created_by ?? undefined,
+    },
+  });
+}
+
 function isMissingSessionBindingError(error: unknown): boolean {
   return (
     error instanceof Error &&
@@ -9829,8 +9837,6 @@ function emptySessionHistoryPayload(
     harness: "",
     harness_session_id: "",
     source: "sandbox_local_storage",
-    main_session_id: sessionId,
-    is_main_session: true,
     messages: [],
     count: 0,
     total: 0,
@@ -11218,6 +11224,7 @@ const TEXT_FILE_EXTENSIONS = new Set([
   ".txt",
   ".md",
   ".mdx",
+  ".markdown",
   ".json",
   ".js",
   ".jsx",
@@ -11293,81 +11300,125 @@ function toPreviewTableCellValue(value: unknown): string {
   return String(value);
 }
 
-function buildTablePreviewSheets(
+function trimTrailingEmptyTableCells(row: string[]): string[] {
+  let lastNonEmptyIndex = row.length - 1;
+  while (lastNonEmptyIndex >= 0 && row[lastNonEmptyIndex] === "") {
+    lastNonEmptyIndex -= 1;
+  }
+  return row.slice(0, lastNonEmptyIndex + 1);
+}
+
+function worksheetPreviewRows(worksheet: ExcelJS.Worksheet): string[][] {
+  const rows: string[][] = [];
+  worksheet.eachRow({ includeEmpty: false }, (row) => {
+    const values: string[] = [];
+    row.eachCell({ includeEmpty: true }, (cell, columnNumber) => {
+      values[columnNumber - 1] = toPreviewTableCellValue(cell.text);
+    });
+    rows.push(trimTrailingEmptyTableCells(values));
+  });
+  return rows;
+}
+
+function tablePreviewSheetFromRows(
+  sheetName: string,
+  sheetIndex: number,
+  rawRows: string[][],
+  totalSheetCount: number,
+): FilePreviewTableSheetPayload {
+  const totalColumns = rawRows.reduce(
+    (max, row) => Math.max(max, row.length),
+    0,
+  );
+  const visibleColumnCount = Math.min(
+    Math.max(totalColumns, 1),
+    MAX_TABLE_PREVIEW_COLUMNS,
+  );
+  const paddedRows = rawRows.map((row) =>
+    Array.from(
+      { length: visibleColumnCount },
+      (_unused, columnIndex) => row[columnIndex] ?? "",
+    ),
+  );
+  const hasHeaderRow =
+    paddedRows.length > 0 &&
+    paddedRows[0].some((cell) => cell.trim().length > 0);
+  const columns = hasHeaderRow
+    ? paddedRows[0].map(
+        (value, columnIndex) => value.trim() || `Column ${columnIndex + 1}`,
+      )
+    : Array.from(
+        { length: visibleColumnCount },
+        (_unused, columnIndex) => `Column ${columnIndex + 1}`,
+      );
+  const allRows = hasHeaderRow ? paddedRows.slice(1) : paddedRows;
+  const rows = allRows.slice(0, MAX_TABLE_PREVIEW_ROWS);
+  const truncated =
+    allRows.length > rows.length ||
+    totalColumns > visibleColumnCount ||
+    totalSheetCount > MAX_TABLE_PREVIEW_SHEETS;
+
+  return {
+    name: sheetName || `Sheet ${sheetIndex + 1}`,
+    index: sheetIndex,
+    columns,
+    rows,
+    totalRows: allRows.length,
+    totalColumns,
+    truncated,
+  };
+}
+
+async function buildWorkbookPreviewSheets(
   buffer: Buffer,
-): FilePreviewTableSheetPayload[] {
-  const workbook = XLSX.read(buffer, {
-    type: "buffer",
-    cellDates: true,
-    dense: true,
+): Promise<FilePreviewTableSheetPayload[]> {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(
+    buffer as unknown as Parameters<ExcelJS.Workbook["xlsx"]["load"]>[0],
+  );
+
+  const worksheets = workbook.worksheets.slice(0, MAX_TABLE_PREVIEW_SHEETS);
+  return worksheets.map((worksheet, sheetIndex) =>
+    tablePreviewSheetFromRows(
+      worksheet.name,
+      sheetIndex,
+      worksheetPreviewRows(worksheet),
+      workbook.worksheets.length,
+    ),
+  );
+}
+
+async function buildCsvPreviewSheets(
+  buffer: Buffer,
+): Promise<FilePreviewTableSheetPayload[]> {
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = await workbook.csv.read(Readable.from([buffer.toString("utf8")]), {
+    parserOptions: {
+      delimiter: ",",
+      quote: '"',
+      escape: '"',
+      trim: false,
+    },
   });
 
-  const sheets: FilePreviewTableSheetPayload[] = [];
-  const limitedSheetNames = workbook.SheetNames.slice(
-    0,
-    MAX_TABLE_PREVIEW_SHEETS,
-  );
-  for (const [sheetIndex, sheetName] of limitedSheetNames.entries()) {
-    const worksheet = workbook.Sheets[sheetName];
-    if (!worksheet) {
-      continue;
-    }
-
-    const matrix = XLSX.utils.sheet_to_json<unknown[]>(worksheet, {
-      header: 1,
-      blankrows: false,
-      defval: "",
-      raw: false,
-    });
-    const normalizedRows = matrix.map((row) =>
-      Array.isArray(row) ? row.map(toPreviewTableCellValue) : [],
-    );
-    const totalColumns = normalizedRows.reduce(
-      (max, row) => Math.max(max, row.length),
+  return [
+    tablePreviewSheetFromRows(
+      worksheet.name,
       0,
-    );
-    const visibleColumnCount = Math.min(
-      Math.max(totalColumns, 1),
-      MAX_TABLE_PREVIEW_COLUMNS,
-    );
-    const paddedRows = normalizedRows.map((row) =>
-      Array.from(
-        { length: visibleColumnCount },
-        (_unused, columnIndex) => row[columnIndex] ?? "",
-      ),
-    );
+      worksheetPreviewRows(worksheet),
+      1,
+    ),
+  ];
+}
 
-    const hasHeaderRow =
-      paddedRows.length > 0 &&
-      paddedRows[0].some((cell) => cell.trim().length > 0);
-    const columns = hasHeaderRow
-      ? paddedRows[0].map(
-          (value, columnIndex) => value.trim() || `Column ${columnIndex + 1}`,
-        )
-      : Array.from(
-          { length: visibleColumnCount },
-          (_unused, columnIndex) => `Column ${columnIndex + 1}`,
-        );
-
-    const allRows = hasHeaderRow ? paddedRows.slice(1) : paddedRows;
-    const rows = allRows.slice(0, MAX_TABLE_PREVIEW_ROWS);
-    const truncated =
-      allRows.length > rows.length ||
-      totalColumns > visibleColumnCount ||
-      workbook.SheetNames.length > MAX_TABLE_PREVIEW_SHEETS;
-
-    sheets.push({
-      name: sheetName || `Sheet ${sheetIndex + 1}`,
-      index: sheetIndex,
-      columns,
-      rows,
-      totalRows: allRows.length,
-      totalColumns,
-      truncated,
-    });
+async function buildTablePreviewSheets(
+  buffer: Buffer,
+  extension: string,
+): Promise<FilePreviewTableSheetPayload[]> {
+  if (extension === ".csv") {
+    return buildCsvPreviewSheets(buffer);
   }
-
-  return sheets;
+  return buildWorkbookPreviewSheets(buffer);
 }
 
 function getFilePreviewKind(targetPath: string) {
@@ -11435,7 +11486,7 @@ async function readFilePreview(
 
     try {
       const buffer = await fs.readFile(absolutePath);
-      const tableSheets = buildTablePreviewSheets(buffer);
+      const tableSheets = await buildTablePreviewSheets(buffer, extension);
       if (tableSheets.length === 0) {
         return {
           ...basePayload,
@@ -15255,6 +15306,12 @@ app.whenReady().then(async () => {
     "workspace:listAgentSessions",
     ["main"],
     async (_event, workspaceId: string) => listAgentSessions(workspaceId),
+  );
+  handleTrustedIpc(
+    "workspace:createAgentSession",
+    ["main"],
+    async (_event, payload: CreateAgentSessionPayload) =>
+      createAgentSession(payload),
   );
   handleTrustedIpc(
     "workspace:getSessionHistory",

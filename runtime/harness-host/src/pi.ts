@@ -24,7 +24,7 @@ import {
 import type { Api, ImageContent, Model, TextContent } from "@mariozechner/pi-ai";
 import type { ResourceDiagnostic } from "@mariozechner/pi-coding-agent";
 import { APIError as OpenAIApiError } from "openai";
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 import { createCallResult, createRuntime, type Runtime as McporterRuntime, type ServerDefinition, type ServerToolInfo } from "mcporter";
 
 import type {
@@ -431,16 +431,34 @@ async function extractPptxAttachmentText(buffer: Buffer, fileName: string): Prom
 }
 
 async function extractExcelAttachmentText(buffer: Buffer, fileName: string): Promise<string> {
-  const workbook = XLSX.read(buffer, { type: "buffer" });
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(
+    buffer as unknown as Parameters<ExcelJS.Workbook["xlsx"]["load"]>[0],
+  );
   let extractedText = `<excel filename="${escapeXmlAttribute(fileName)}">`;
-  for (const [index, sheetName] of workbook.SheetNames.entries()) {
-    const worksheet = workbook.Sheets[sheetName];
-    if (!worksheet) {
-      continue;
-    }
-    const csvText = XLSX.utils.sheet_to_csv(worksheet).trim();
-    extractedText += `\n<sheet name="${escapeXmlAttribute(sheetName)}" index="${index + 1}">\n${csvText}\n</sheet>`;
-  }
+  workbook.eachSheet((worksheet, index) => {
+    const csvRows: string[] = [];
+    worksheet.eachRow({ includeEmpty: false }, (row) => {
+      const cells: string[] = [];
+      row.eachCell({ includeEmpty: true }, (cell, columnNumber) => {
+        const raw = cell.text ?? "";
+        cells[columnNumber - 1] = /[",\n\r]/.test(raw)
+          ? `"${raw.replace(/"/g, "\"\"")}"`
+          : raw;
+      });
+
+      let lastNonEmptyIndex = cells.length - 1;
+      while (lastNonEmptyIndex >= 0 && cells[lastNonEmptyIndex] === "") {
+        lastNonEmptyIndex -= 1;
+      }
+      const normalized = cells.slice(0, lastNonEmptyIndex + 1);
+      if (normalized.length > 0) {
+        csvRows.push(normalized.join(","));
+      }
+    });
+
+    extractedText += `\n<sheet name="${escapeXmlAttribute(worksheet.name)}" index="${index}">\n${csvRows.join("\n").trim()}\n</sheet>`;
+  });
   extractedText += "\n</excel>";
   return normalizeExtractedText(extractedText);
 }
@@ -459,7 +477,11 @@ async function extractAttachmentText(request: HarnessHostPiRequest, attachment: 
     return await extractPptxAttachmentText(buffer, attachment.name);
   }
   if (isExcelAttachment(attachment)) {
-    return await extractExcelAttachmentText(buffer, attachment.name);
+    try {
+      return await extractExcelAttachmentText(buffer, attachment.name);
+    } catch {
+      return null;
+    }
   }
   if (!isTextLikeAttachment(attachment) || isBinaryBuffer(buffer)) {
     return null;
@@ -3029,7 +3051,10 @@ async function defaultCreateSession(request: HarnessHostPiRequest): Promise<PiSe
   const authStorage = AuthStorage.create(path.join(stateDir, "auth.json"));
   authStorage.setRuntimeApiKey(request.provider_id, request.model_client.api_key);
 
-  const modelRegistry = new ModelRegistry(authStorage, path.join(stateDir, "models.json"));
+  const modelRegistry = ModelRegistry.create(
+    authStorage,
+    path.join(stateDir, "models.json"),
+  );
   modelRegistry.registerProvider(request.provider_id, buildPiProviderConfig(request));
 
   const model = resolvePiModel(request, modelRegistry);
@@ -3289,6 +3314,70 @@ function assistantMessageText(content: unknown): string {
     .trim();
 }
 
+function parseJsonIfPossible(value: string): unknown {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
+    return null;
+  }
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+}
+
+function extractProviderErrorMessage(value: unknown, depth = 0): string | null {
+  if (depth > 6 || value == null) {
+    return null;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const parsed = parseJsonIfPossible(trimmed);
+    if (parsed !== null) {
+      const nested = extractProviderErrorMessage(parsed, depth + 1);
+      if (nested) {
+        return nested;
+      }
+    }
+    return trimmed;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const nested = extractProviderErrorMessage(item, depth + 1);
+      if (nested) {
+        return nested;
+      }
+    }
+    return null;
+  }
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  for (const key of ["error", "errors", "message", "detail", "details", "error_message", "body", "cause"] as const) {
+    const nested = extractProviderErrorMessage(value[key], depth + 1);
+    if (nested) {
+      return nested;
+    }
+  }
+  return null;
+}
+
+function normalizeAssistantFailureMessage(errorMessage: unknown, content: unknown, stopReason: string): string {
+  return (
+    extractProviderErrorMessage(errorMessage) ??
+    firstNonEmptyString(
+      typeof errorMessage === "string" ? errorMessage : undefined,
+      assistantMessageText(content),
+      `Assistant message ended with stop reason ${stopReason}`
+    ) ??
+    `Assistant message ended with stop reason ${stopReason}`
+  );
+}
+
 function maybeMapAssistantTerminalFailure(
   event: AgentSessionEvent,
   sessionFile: string,
@@ -3309,12 +3398,7 @@ function maybeMapAssistantTerminalFailure(
     return [];
   }
   state.terminalState = "failed";
-  const failureMessage =
-    firstNonEmptyString(
-      message.errorMessage,
-      assistantMessageText(message.content),
-      `Assistant message ended with stop reason ${stopReason}`
-    ) ?? `Assistant message ended with stop reason ${stopReason}`;
+  const failureMessage = normalizeAssistantFailureMessage(message.errorMessage, message.content, stopReason);
   return [
     {
       event_type: "run_failed",
@@ -3439,7 +3523,7 @@ function mapPiEvent(
       }
       return mapped;
     }
-    case "auto_compaction_start":
+    case "compaction_start":
       return [
         {
           event_type: "auto_compaction_start",
@@ -3450,7 +3534,7 @@ function mapPiEvent(
           },
         },
       ];
-    case "auto_compaction_end":
+    case "compaction_end":
       return [
         {
           event_type: "auto_compaction_end",

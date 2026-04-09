@@ -263,26 +263,23 @@ test("chat pane binds in-flight stream attach to the current runtime input on se
   );
 });
 
-test("chat pane exposes a return path from sub-sessions back to the main session", async () => {
+test("chat pane can create a workspace session when none exists yet", async () => {
   const source = await readFile(sourcePath, "utf8");
 
-  assert.match(source, /const showMainSessionReturn =[\s\S]*activeSessionId !== mainSessionId;/);
   assert.match(
     source,
-    /You are viewing a separate run session\.[\s\S]*Return to the main[\s\S]*workspace chat to continue there\./,
+    /async function createWorkspaceSession\(\s*workspaceId: string,\s*parentSessionId\?: string \| null,\s*\): Promise<string \| null>/,
   );
-  assert.match(source, /Back to main session/);
-  assert.match(
+  assert.match(source, /window\.electronAPI\.workspace\.createAgentSession\(\{/);
+  assert.match(source, /parent_session_id: parentSessionId\?\.trim\(\) \|\| null,/);
+  assert.match(source, /const resolvedSessionId = nextSessionId \|\| null;/);
+  assert.doesNotMatch(
     source,
-    /showMainSessionReturn \? \(\s*<div className="shrink-0 px-4 pt-3 sm:px-5">\s*<div className="bg-muted\/72 flex flex-col items-start gap-3/,
-  );
-  assert.match(
-    source,
-    /await loadSessionConversation\(\s*mainSessionId,\s*selectedWorkspaceId,\s*runtimeStates\.items,\s*\);/,
+    /const resolvedSessionId =\s*nextSessionId \|\| \(await createWorkspaceSession\(selectedWorkspaceId\)\);/,
   );
   assert.match(
     source,
-    /const targetSessionId =[\s\S]*activeSessionIdRef\.current \|\| preferredSessionId\(selectedWorkspace, \[\]\);/,
+    /if \(!targetSessionId && selectedWorkspace\) \{\s*targetSessionId = await createWorkspaceSession\(\s*selectedWorkspace\.id,\s*draftParentSessionIdRef\.current,\s*\);/,
   );
 });
 
@@ -359,6 +356,27 @@ test("chat turns render markdown and keep long content wrapped inside the bubble
   assert.match(source, /theme-chat-user-bubble inline-flex min-w-0 max-w-full/);
 });
 
+test("user turns expose a hover footer with copy and timestamp metadata", async () => {
+  const source = await readFile(sourcePath, "utf8");
+
+  assert.match(source, /createdAt\?: string;/);
+  assert.match(source, /function chatMessageTimeLabel\(value: string \| null \| undefined\): string/);
+  assert.match(source, /navigator\.clipboard\?\.writeText/);
+  assert.match(source, /document\.execCommand\("copy"\)/);
+  assert.match(source, /const timeLabel = chatMessageTimeLabel\(createdAt\);/);
+  assert.match(source, /className="group\/user-turn flex min-w-0 justify-end"/);
+  assert.match(
+    source,
+    /group-hover\/user-turn:opacity-100[\s\S]*group-hover\/user-turn:pointer-events-auto[\s\S]*group-focus-within\/user-turn:opacity-100/,
+  );
+  assert.match(source, /aria-label=\{\s*copyFeedbackVisible[\s\S]*"Copy user message"/);
+  assert.match(source, /<Copy size=\{13\} strokeWidth=\{1\.9\} \/>/);
+  assert.match(source, /<Check size=\{13\} strokeWidth=\{1\.9\} \/>/);
+  assert.match(source, /createdAt: message\.created_at \|\| undefined,/);
+  assert.match(source, /createdAt: new Date\(\)\.toISOString\(\),/);
+  assert.match(source, /createdAt=\{message\.createdAt\}/);
+});
+
 test("chat thread uses the full pane width for normal messages", async () => {
   const source = await readFile(sourcePath, "utf8");
 
@@ -366,7 +384,7 @@ test("chat thread uses the full pane width for normal messages", async () => {
   assert.match(source, /messagesContentRef\}[\s\S]*className=\{`flex min-w-0 w-full flex-col gap-7 px-6 pb-3 pt-5 \$\{\s*showHistoryRestoreScreen \? "invisible" : ""\s*\}`\}/);
   assert.match(source, /<form onSubmit=\{onSubmit\} className="w-full">/);
   assert.match(source, /<div className="flex min-w-0 justify-start">[\s\S]*<article className="min-w-0 flex-1">/);
-  assert.match(source, /<div className="flex min-w-0 justify-end">[\s\S]*max-w-\[420px\][\s\S]*sm:max-w-\[560px\][\s\S]*lg:max-w-\[680px\]/);
+  assert.match(source, /className="group\/user-turn flex min-w-0 justify-end"[\s\S]*max-w-\[420px\][\s\S]*sm:max-w-\[560px\][\s\S]*lg:max-w-\[680px\]/);
   assert.doesNotMatch(source, /messagesContentRef\}[\s\S]*max-w-\[800px\]/);
   assert.doesNotMatch(source, /<article className="max-w-\[760px\]">/);
 });
@@ -386,6 +404,41 @@ test("chat pane renders run-scoped memory proposal cards with accept dismiss and
   assert.match(source, /Edit memory proposal/);
 });
 
+test("view all artifacts modal sorts artifacts newest first", async () => {
+  const source = await readFile(sourcePath, "utf8");
+
+  assert.match(
+    source,
+    /function sortOutputsLatestFirst\(outputs: WorkspaceOutputRecordPayload\[\]\)/,
+  );
+  assert.match(
+    source,
+    /const filteredOutputs = sortOutputsLatestFirst\(\s*filter === "all"\s*\?\s*outputs\s*:\s*outputs\.filter\(/,
+  );
+  assert.match(
+    source,
+    /if \(leftTime !== rightTime\) \{\s*return rightTime - leftTime;\s*\}/,
+  );
+});
+
+test("artifact rows include timestamp metadata in both inline and modal lists", async () => {
+  const source = await readFile(sourcePath, "utf8");
+
+  assert.match(source, /const timeLabel = chatMessageTimeLabel\(output\.created_at\);/);
+  assert.match(
+    source,
+    /if \(timeLabel\) \{\s*parts\.push\(timeLabel\);\s*\}/,
+  );
+  assert.match(
+    source,
+    /<div className="text-\[11px\] text-muted-foreground">\s*\{outputSecondaryLabel\(output\)\}\s*<\/div>/,
+  );
+  assert.match(
+    source,
+    /<div className="truncate text-\[12px\] text-muted-foreground">\s*\{outputSecondaryLabel\(output\)\}\s*<\/div>/,
+  );
+});
+
 test("tool trace steps are collapsed by default and first toggle expands them", async () => {
   const source = await readFile(sourcePath, "utf8");
 
@@ -400,13 +453,23 @@ test("chat pane can jump to a requested sub-session run", async () => {
   assert.match(source, /sessionJumpSessionId = null/);
   assert.match(source, /sessionJumpRequestKey = 0/);
   assert.match(source, /const lastHandledSessionJumpRequestKeyRef = useRef\(0\);/);
+  assert.match(source, /const lastHandledSessionOpenRequestKeyRef = useRef\(0\);/);
+  assert.match(source, /const draftParentSessionIdRef = useRef<string \| null>\(null\);/);
   assert.match(
     source,
     /const hasSessionJumpRequest =[\s\S]*sessionJumpRequestKey > 0[\s\S]*sessionJumpRequestKey !== lastHandledSessionJumpRequestKeyRef\.current/,
   );
   assert.match(
     source,
-    /const requestedOpenSessionId =[\s\S]*sessionOpenRequest\?\.sessionId \|\| ""[\s\S]*\.trim\(\);[\s\S]*const nextSessionId =[\s\S]*hasSessionJumpRequest && requestedSessionId[\s\S]*\? requestedSessionId[\s\S]*: requestedOpenSessionId\)[\s\S]*preferredSessionId\(selectedWorkspaceRef\.current, runtimeStates\.items\);/,
+    /const requestMode = sessionOpenRequest\?\.mode \?\? "session";[\s\S]*const requestedParentSessionId =[\s\S]*sessionOpenRequest\?\.parentSessionId\?\.trim\(\) \|\| null;/,
+  );
+  assert.match(
+    source,
+    /if \(requestMode === "draft"\) \{\s*draftParentSessionIdRef\.current = requestedParentSessionId;\s*clearSessionView\(\);\s*setActiveSession\(null\);\s*requestHistoryViewportRestore\(\);\s*historyLoaded = true;\s*return;\s*\}/,
+  );
+  assert.match(
+    source,
+    /const nextSessionId =\s*\(hasSessionJumpRequest && requestedSessionId\s*\?\s*requestedSessionId\s*:\s*null\)\s*\|\|\s*preferredSessionId\(\s*selectedWorkspaceRef\.current,\s*runtimeStates\.items,\s*sessionsResponse\.items,\s*\);[\s\S]*const resolvedSessionId = nextSessionId \|\| null;/,
   );
 });
 
@@ -486,5 +549,35 @@ test("chat pane renders a collapsed current todo panel above the composer", asyn
   assert.match(
     source,
     /completedStatus === "paused" \|\| completedStatus === "waiting_user"/,
+  );
+});
+
+test("chat pane stops auto-follow while the user is actively selecting chat text", async () => {
+  const source = await readFile(sourcePath, "utf8");
+
+  assert.match(source, /function hasActiveChatSelection\(container: HTMLDivElement \| null\)/);
+  assert.match(source, /const selection = window\.getSelection\(\);/);
+  assert.match(
+    source,
+    /!container \|\|\s*!shouldAutoScrollRef\.current \|\|\s*hasActiveChatSelection\(container\)/,
+  );
+});
+
+test("chat pane stops auto-follow as soon as the user scrolls upward during streaming", async () => {
+  const source = await readFile(sourcePath, "utf8");
+
+  assert.match(source, /const lastChatScrollTopRef = useRef\(0\);/);
+  assert.match(source, /lastChatScrollTopRef\.current = target\.scrollTop;/);
+  assert.match(
+    source,
+    /onWheelCapture=\{\(event\) => \{\s*if \(event\.deltaY < 0\) \{\s*shouldAutoScrollRef\.current = false;\s*\}\s*\}\}/,
+  );
+  assert.match(
+    source,
+    /const scrolledUp =\s*currentTarget\.scrollTop < lastChatScrollTopRef\.current;/,
+  );
+  assert.match(
+    source,
+    /shouldAutoScrollRef\.current = scrolledUp \? false : nearBottom;/,
   );
 });

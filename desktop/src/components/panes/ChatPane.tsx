@@ -20,6 +20,7 @@ import {
   Check,
   ChevronDown,
   Clock3,
+  Copy,
   FileText,
   Image as ImageIcon,
   Lightbulb,
@@ -62,6 +63,7 @@ interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   text: string;
+  createdAt?: string;
   attachments?: ChatAttachment[];
   thinkingText?: string;
   traceSteps?: ChatTraceStep[];
@@ -507,6 +509,10 @@ function outputSecondaryLabel(output: WorkspaceOutputRecordPayload) {
   if (sizeLabel) {
     parts.push(sizeLabel);
   }
+  const timeLabel = chatMessageTimeLabel(output.created_at);
+  if (timeLabel) {
+    parts.push(timeLabel);
+  }
   return parts.join(" · ");
 }
 
@@ -516,6 +522,17 @@ function sortOutputs(outputs: WorkspaceOutputRecordPayload[]) {
     const rightTime = Date.parse(right.created_at || "") || 0;
     if (leftTime !== rightTime) {
       return leftTime - rightTime;
+    }
+    return left.title.localeCompare(right.title);
+  });
+}
+
+function sortOutputsLatestFirst(outputs: WorkspaceOutputRecordPayload[]) {
+  return [...outputs].sort((left, right) => {
+    const leftTime = Date.parse(left.created_at || "") || 0;
+    const rightTime = Date.parse(right.created_at || "") || 0;
+    if (leftTime !== rightTime) {
+      return rightTime - leftTime;
     }
     return left.title.localeCompare(right.title);
   });
@@ -1487,9 +1504,66 @@ function isNearChatBottom(container: HTMLDivElement) {
   return remaining <= CHAT_AUTO_SCROLL_THRESHOLD_PX;
 }
 
+function chatMessageTimeLabel(value: string | null | undefined): string {
+  const timestamp = Date.parse(value || "");
+  if (Number.isNaN(timestamp)) {
+    return "";
+  }
+  return new Date(timestamp).toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+async function copyTextToClipboard(value: string) {
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+  if (typeof document === "undefined") {
+    throw new Error("Clipboard is unavailable.");
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  textarea.style.pointerEvents = "none";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  textarea.setSelectionRange(0, textarea.value.length);
+
+  const copied = document.execCommand("copy");
+  document.body.removeChild(textarea);
+
+  if (!copied) {
+    throw new Error("Clipboard copy failed.");
+  }
+}
+
+function hasActiveChatSelection(container: HTMLDivElement | null) {
+  if (!container || typeof window === "undefined") {
+    return false;
+  }
+
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed) {
+    return false;
+  }
+
+  return (
+    container.contains(selection.anchorNode) ||
+    container.contains(selection.focusNode)
+  );
+}
+
 interface ChatPaneSessionOpenRequest {
   sessionId: string;
   requestKey: number;
+  mode?: "session" | "draft";
+  parentSessionId?: string | null;
 }
 
 interface ChatPaneComposerPrefillRequest {
@@ -1603,6 +1677,7 @@ export function ChatPane({
   const composerBlockRef = useRef<HTMLDivElement>(null);
   const composerIsComposingRef = useRef(false);
   const shouldAutoScrollRef = useRef(true);
+  const lastChatScrollTopRef = useRef(0);
   const activeSessionIdRef = useRef<string | null>(null);
   const activeStreamIdRef = useRef<string | null>(null);
   const activeAssistantMessageIdRef = useRef<string | null>(null);
@@ -1612,7 +1687,9 @@ export function ChatPane({
   const isOnboardingVariant = variant === "onboarding";
   const pendingFocusRequestKeyRef = useRef<number | null>(focusRequestKey);
   const lastHandledSessionJumpRequestKeyRef = useRef(0);
+  const lastHandledSessionOpenRequestKeyRef = useRef(0);
   const lastHandledComposerPrefillRequestKeyRef = useRef(0);
+  const draftParentSessionIdRef = useRef<string | null>(null);
   const liveAssistantTextRef = useRef("");
   const liveThinkingTextRef = useRef("");
   const liveThinkingExpandedRef = useRef(false);
@@ -1768,6 +1845,7 @@ export function ChatPane({
             `history-${message.created_at ?? crypto.randomUUID()}`,
           role: message.role as ChatMessage["role"],
           text: message.text,
+          createdAt: message.created_at || undefined,
           attachments,
         };
 
@@ -1943,52 +2021,18 @@ export function ChatPane({
     }
   }
 
-  async function returnToMainSession() {
-    const mainSessionId = (selectedWorkspace?.main_session_id || "").trim();
-    if (
-      !selectedWorkspaceId ||
-      !mainSessionId ||
-      activeSessionIdRef.current === mainSessionId
-    ) {
-      return;
-    }
-
-    let historyLoaded = false;
-    beginHistoryViewportRestore();
-    setIsLoadingHistory(true);
-    setChatErrorMessage("");
-    pendingInputIdRef.current = null;
-    activeAssistantMessageIdRef.current = null;
-    setIsResponding(false);
-
-    const activeStreamId = activeStreamIdRef.current;
-    activeStreamIdRef.current = null;
-    if (activeStreamId) {
-      await closeStreamWithReason(
-        activeStreamId,
-        "chatpane_return_to_main_session",
-      ).catch(() => undefined);
-    }
-
-    try {
-      const runtimeStates =
-        await window.electronAPI.workspace.listRuntimeStates(
-          selectedWorkspaceId,
-        );
-      await loadSessionConversation(
-        mainSessionId,
-        selectedWorkspaceId,
-        runtimeStates.items,
-      );
-      historyLoaded = true;
-    } catch (error) {
-      setChatErrorMessage(normalizeErrorMessage(error));
-    } finally {
-      if (!historyLoaded) {
-        cancelHistoryViewportRestore();
-      }
-      setIsLoadingHistory(false);
-    }
+  async function createWorkspaceSession(
+    workspaceId: string,
+    parentSessionId?: string | null,
+  ): Promise<string | null> {
+    const created = await window.electronAPI.workspace.createAgentSession({
+      workspace_id: workspaceId,
+      kind: "workspace_session",
+      parent_session_id: parentSessionId?.trim() || null,
+      created_by: "workspace_user",
+    });
+    const sessionId = created.session.session_id.trim();
+    return sessionId || null;
   }
 
   function appendLiveAssistantDelta(delta: string) {
@@ -2173,6 +2217,8 @@ export function ChatPane({
       return;
     }
 
+    lastChatScrollTopRef.current = target.scrollTop;
+
     setChatScrollMetrics((previous) => {
       const next = {
         scrollTop: target.scrollTop,
@@ -2206,7 +2252,11 @@ export function ChatPane({
 
   useEffect(() => {
     const container = messagesRef.current;
-    if (!container || !shouldAutoScrollRef.current) {
+    if (
+      !container ||
+      !shouldAutoScrollRef.current ||
+      hasActiveChatSelection(container)
+    ) {
       return;
     }
 
@@ -2362,6 +2412,8 @@ export function ChatPane({
       setActiveSession(null);
       pendingInputIdRef.current = null;
       lastHandledSessionJumpRequestKeyRef.current = 0;
+      lastHandledSessionOpenRequestKeyRef.current = 0;
+      draftParentSessionIdRef.current = null;
       return;
     }
 
@@ -2396,24 +2448,27 @@ export function ChatPane({
           }
         }
 
-        const runtimeStates =
-          await window.electronAPI.workspace.listRuntimeStates(
-            selectedWorkspaceId,
-          );
+        const [runtimeStates, sessionsResponse] = await Promise.all([
+          window.electronAPI.workspace.listRuntimeStates(selectedWorkspaceId),
+          window.electronAPI.workspace.listAgentSessions(selectedWorkspaceId),
+        ]);
         if (cancelled) {
           return;
         }
 
-        const requestedOpenSessionId = (
-          sessionOpenRequest?.sessionId || ""
-        ).trim();
         const nextSessionId =
           (hasSessionJumpRequest && requestedSessionId
             ? requestedSessionId
-            : requestedOpenSessionId) ||
-          preferredSessionId(selectedWorkspaceRef.current, runtimeStates.items);
+            : null) ||
+          preferredSessionId(
+            selectedWorkspaceRef.current,
+            runtimeStates.items,
+            sessionsResponse.items,
+          );
+        const resolvedSessionId = nextSessionId || null;
+        draftParentSessionIdRef.current = null;
         await loadSessionConversation(
-          nextSessionId,
+          resolvedSessionId,
           selectedWorkspaceId,
           runtimeStates.items,
           {
@@ -2443,25 +2498,29 @@ export function ChatPane({
     isOnboardingVariant,
     sessionJumpRequestKey,
     sessionJumpSessionId,
-    sessionOpenRequest?.sessionId,
     selectedWorkspaceId,
-    selectedWorkspace?.main_session_id,
     selectedWorkspace?.onboarding_session_id,
     selectedWorkspace?.onboarding_status,
   ]);
 
   useEffect(() => {
     const requestedSessionId = (sessionOpenRequest?.sessionId || "").trim();
-    if (!selectedWorkspaceId || !requestedSessionId) {
+    const requestKey = sessionOpenRequest?.requestKey ?? 0;
+    const requestMode = sessionOpenRequest?.mode ?? "session";
+    const requestedParentSessionId =
+      sessionOpenRequest?.parentSessionId?.trim() || null;
+    if (
+      !selectedWorkspaceId ||
+      requestKey <= 0 ||
+      requestKey === lastHandledSessionOpenRequestKeyRef.current
+    ) {
       return;
     }
 
     let cancelled = false;
 
     async function openRequestedSession() {
-      if (activeSessionIdRef.current === requestedSessionId) {
-        return;
-      }
+      lastHandledSessionOpenRequestKeyRef.current = requestKey;
 
       let historyLoaded = false;
       beginHistoryViewportRestore();
@@ -2481,6 +2540,27 @@ export function ChatPane({
       }
 
       try {
+        if (requestMode === "draft") {
+          draftParentSessionIdRef.current = requestedParentSessionId;
+          clearSessionView();
+          setActiveSession(null);
+          requestHistoryViewportRestore();
+          historyLoaded = true;
+          return;
+        }
+
+        if (!requestedSessionId) {
+          historyLoaded = true;
+          return;
+        }
+
+        draftParentSessionIdRef.current = null;
+        if (activeSessionIdRef.current === requestedSessionId) {
+          requestHistoryViewportRestore();
+          historyLoaded = true;
+          return;
+        }
+
         const runtimeStates =
           await window.electronAPI.workspace.listRuntimeStates(
             selectedWorkspaceId,
@@ -2516,6 +2596,8 @@ export function ChatPane({
     selectedWorkspaceId,
     sessionOpenRequest?.requestKey,
     sessionOpenRequest?.sessionId,
+    sessionOpenRequest?.mode,
+    sessionOpenRequest?.parentSessionId,
   ]);
 
   useEffect(() => {
@@ -3088,8 +3170,17 @@ export function ChatPane({
       );
       return;
     }
-    const targetSessionId =
-      activeSessionIdRef.current || preferredSessionId(selectedWorkspace, []);
+    let targetSessionId = activeSessionIdRef.current;
+    if (!targetSessionId && selectedWorkspace) {
+      targetSessionId = await createWorkspaceSession(
+        selectedWorkspace.id,
+        draftParentSessionIdRef.current,
+      );
+      if (targetSessionId) {
+        draftParentSessionIdRef.current = null;
+        setActiveSession(targetSessionId);
+      }
+    }
     if (!targetSessionId) {
       setChatErrorMessage("No active session found for this workspace.");
       return;
@@ -3185,6 +3276,7 @@ export function ChatPane({
         id: `user-${Date.now()}`,
         role: "user",
         text: trimmed,
+        createdAt: new Date().toISOString(),
         attachments: stagedAttachments,
       };
 
@@ -3645,12 +3737,6 @@ export function ChatPane({
   const textareaPlaceholder = isOnboardingVariant
     ? "Answer the onboarding prompt or share setup details"
     : "Ask anything";
-  const mainSessionId = (selectedWorkspace?.main_session_id || "").trim();
-  const showMainSessionReturn =
-    !isOnboardingVariant &&
-    Boolean(mainSessionId) &&
-    Boolean(activeSessionId) &&
-    activeSessionId !== mainSessionId;
   const showHistoryRestoreScreen =
     isLoadingHistory || isHistoryViewportPending;
   const chatScrollRange = Math.max(
@@ -3789,30 +3875,6 @@ export function ChatPane({
           </div>
         ) : null}
 
-        {showMainSessionReturn ? (
-          <div className="shrink-0 px-4 pt-3 sm:px-5">
-            <div className="bg-muted/72 flex flex-col items-start gap-3 rounded-[16px] border border-border/55 px-3 py-2.5">
-              <div className="min-w-0">
-                <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-                  Sub-session
-                </div>
-                <div className="mt-1 text-[12px] leading-5 text-muted-foreground">
-                  You are viewing a separate run session. Return to the main
-                  workspace chat to continue there.
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => void returnToMainSession()}
-                disabled={isLoadingHistory}
-                className="inline-flex items-center rounded-full border border-border/60 bg-background px-3 py-1.5 text-[12px] font-medium text-foreground transition hover:border-primary/35 hover:text-primary disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                Back to main session
-              </button>
-            </div>
-          </div>
-        ) : null}
-
         {showLowBalanceWarning || showOutOfCreditsWarning ? (
           <div className="shrink-0 px-4 pt-3 sm:px-5">
             <div className="bg-muted/72 flex flex-wrap items-center justify-between gap-3 rounded-[16px] border border-border/55 px-3 py-2.5">
@@ -3897,11 +3959,18 @@ export function ChatPane({
           <div className="min-h-0 flex-1 overflow-hidden">
             <div
               ref={messagesRef}
+              onWheelCapture={(event) => {
+                if (event.deltaY < 0) {
+                  shouldAutoScrollRef.current = false;
+                }
+              }}
               onScroll={(event) => {
-                shouldAutoScrollRef.current = isNearChatBottom(
-                  event.currentTarget,
-                );
-                syncChatScrollMetrics(event.currentTarget);
+                const { currentTarget } = event;
+                const scrolledUp =
+                  currentTarget.scrollTop < lastChatScrollTopRef.current;
+                const nearBottom = isNearChatBottom(currentTarget);
+                shouldAutoScrollRef.current = scrolledUp ? false : nearBottom;
+                syncChatScrollMetrics(currentTarget);
               }}
               className={`chat-scrollbar-hidden h-full min-h-0 overflow-x-hidden overflow-y-auto ${hasMessages ? "" : "flex items-center justify-center"}`}
             >
@@ -3917,6 +3986,7 @@ export function ChatPane({
                       <UserTurn
                         key={message.id}
                         text={message.text}
+                        createdAt={message.createdAt}
                         attachments={message.attachments ?? []}
                         onLinkClick={onOpenLinkInBrowser}
                       />
@@ -4234,15 +4304,50 @@ interface ThinkingPanelProps {
 
 function UserTurn({
   text,
+  createdAt,
   attachments,
   onLinkClick,
 }: {
   text: string;
+  createdAt?: string;
   attachments: ChatAttachment[];
   onLinkClick?: (url: string) => void;
 }) {
+  const [copyFeedbackVisible, setCopyFeedbackVisible] = useState(false);
+  const copyResetTimerRef = useRef<number | null>(null);
+  const timeLabel = chatMessageTimeLabel(createdAt);
+  const canCopy = text.trim().length > 0;
+
+  useEffect(() => {
+    return () => {
+      if (copyResetTimerRef.current !== null) {
+        window.clearTimeout(copyResetTimerRef.current);
+      }
+    };
+  }, []);
+
+  const handleCopy = async () => {
+    if (!canCopy) {
+      return;
+    }
+
+    try {
+      await copyTextToClipboard(text);
+    } catch {
+      return;
+    }
+    setCopyFeedbackVisible(true);
+    if (copyResetTimerRef.current !== null) {
+      window.clearTimeout(copyResetTimerRef.current);
+    }
+    copyResetTimerRef.current = window.setTimeout(() => {
+      setCopyFeedbackVisible(false);
+      copyResetTimerRef.current = null;
+    }, 1600);
+  };
+
   return (
-    <div className="flex min-w-0 justify-end">
+    <div className="group/user-turn flex min-w-0 justify-end">
       <div className="flex min-w-0 max-w-[420px] flex-col items-end gap-2 sm:max-w-[560px] lg:max-w-[680px]">
         {text ? (
           <div className="theme-chat-user-bubble inline-flex min-w-0 max-w-full rounded-[18px] border px-4 py-3 text-foreground/95">
@@ -4256,6 +4361,35 @@ function UserTurn({
         ) : null}
         {attachments.length > 0 ? (
           <AttachmentList attachments={attachments} className="justify-end" />
+        ) : null}
+        {canCopy || timeLabel ? (
+          <div className="flex min-h-6 items-center justify-end gap-2 pr-1 text-[11px] text-muted-foreground/72 opacity-0 pointer-events-none transition duration-150 group-hover/user-turn:opacity-100 group-hover/user-turn:pointer-events-auto group-focus-within/user-turn:opacity-100 group-focus-within/user-turn:pointer-events-auto">
+            {canCopy ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label={
+                  copyFeedbackVisible
+                    ? "Copied user message"
+                    : "Copy user message"
+                }
+                onClick={() => {
+                  void handleCopy();
+                }}
+                className="size-6 rounded-[10px] text-muted-foreground/72 hover:bg-foreground/6 hover:text-foreground"
+              >
+                {copyFeedbackVisible ? (
+                  <Check size={13} strokeWidth={1.9} />
+                ) : (
+                  <Copy size={13} strokeWidth={1.9} />
+                )}
+              </Button>
+            ) : null}
+            {timeLabel ? (
+              <span className="select-none tabular-nums">{timeLabel}</span>
+            ) : null}
+          </div>
         ) : null}
       </div>
     </div>
@@ -4479,7 +4613,7 @@ function AssistantTurnOutputs({
               {output.title || "Untitled artifact"}
             </div>
             <div className="text-[11px] text-muted-foreground">
-              {outputKindLabel(output)}
+              {outputSecondaryLabel(output)}
             </div>
           </div>
         </button>
@@ -4758,12 +4892,13 @@ function ArtifactBrowserModal({
     { id: "links", label: "Links" },
     { id: "apps", label: "Apps" },
   ];
-  const filteredOutputs =
+  const filteredOutputs = sortOutputsLatestFirst(
     filter === "all"
       ? outputs
       : outputs.filter(
           (output) => outputBrowserFilterForOutput(output) === filter,
-        );
+        ),
+  );
 
   return (
     <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/45 px-4 py-6 backdrop-blur-[2px]">

@@ -417,7 +417,7 @@ test("projectAgentRuntimeConfig omits workspace and recent-runtime layers when n
       session_id: "session-1",
       workspace_id: "workspace-1",
       input_id: "input-1",
-      session_kind: "main",
+      session_kind: "workspace_session",
       harness_id: "pi",
       browser_tools_available: false,
       browser_tool_ids: [],
@@ -452,7 +452,7 @@ test("projectAgentRuntimeConfig omits workspace and recent-runtime layers when n
     assert.equal(result.prompt_sections?.some((section) => section.id === "recent_runtime_context"), false);
     assert.equal(result.prompt_sections?.some((section) => section.id === "resume_context"), false);
     assert.deepEqual(result.context_messages, []);
-    assert.match(result.system_prompt, /This is the main workspace session/i);
+    assert.match(result.system_prompt, /This is a workspace session/i);
   } finally {
     delete process.env.HOLABOSS_MODEL_PROXY_BASE_URL;
   }
@@ -718,7 +718,7 @@ test("projectAgentRuntimeConfig normalizes legacy Anthropic direct model aliases
   assert.equal(result.model_client.base_url, "https://api.anthropic.com");
 });
 
-test("projectAgentRuntimeConfig keeps direct Gemini providers on the OpenAI-compatible endpoint", () => {
+test("projectAgentRuntimeConfig routes direct Gemini providers through the Google-compatible adapter", () => {
   const root = makeTempDir("hb-agent-runtime-config-");
   process.env.HB_SANDBOX_ROOT = root;
   process.env.HOLABOSS_RUNTIME_CONFIG_PATH = writeRuntimeConfigDocument(root, {
@@ -784,7 +784,7 @@ test("projectAgentRuntimeConfig keeps direct Gemini providers on the OpenAI-comp
   });
 
   assert.equal(result.provider_id, "gemini_direct");
-  assert.equal(result.model_client.model_proxy_provider, "openai_compatible");
+  assert.equal(result.model_client.model_proxy_provider, "google_compatible");
   assert.equal(result.model_client.api_key, "gm-direct-key");
   assert.equal(result.model_client.base_url, "https://generativelanguage.googleapis.com/v1beta/openai");
   assert.equal(result.model_client.default_headers, null);
@@ -900,6 +900,7 @@ test("projectAgentRuntimeConfig normalizes Gemini host roots to the OpenAI-compa
   });
 
   assert.equal(result.model_client.base_url, "https://generativelanguage.googleapis.com/v1beta/openai");
+  assert.equal(result.model_client.model_proxy_provider, "google_compatible");
 });
 
 test("resolveRuntimeModelClient routes managed Holaboss Gemini models to the dedicated Google proxy path", () => {

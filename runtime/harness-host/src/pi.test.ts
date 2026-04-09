@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import JSZip from "jszip";
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 
 import type { HarnessHostPiRequest } from "./contracts.js";
@@ -81,6 +81,54 @@ test("pi normalizes array-wrapped openai-compatible error bodies", async () => {
   });
 });
 
+test("mapPiSessionEvent extracts nested Gemini provider error messages", () => {
+  const sessionFile = "/tmp/pi-session.jsonl";
+
+  assert.deepEqual(
+    mapPiSessionEvent(
+      {
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [],
+          api: "google-generative-ai",
+          provider: "gemini_direct",
+          model: "gemini-2.5-flash",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "error",
+          errorMessage:
+            "{\"error\":{\"message\":\"{\\n  \\\"error\\\": {\\n    \\\"code\\\": 400,\\n    \\\"message\\\": \\\"User location is not supported for the API use.\\\",\\n    \\\"status\\\": \\\"FAILED_PRECONDITION\\\"\\n  }\\n}\\n\",\"code\":400,\"status\":\"Bad Request\"}}",
+          timestamp: Date.now(),
+        },
+      } as never,
+      sessionFile,
+      createPiEventMapperState()
+    ),
+    [
+      {
+        event_type: "run_failed",
+        payload: {
+          type: "ProviderError",
+          message: "User location is not supported for the API use.",
+          stop_reason: "error",
+          provider: "gemini_direct",
+          model: "gemini-2.5-flash",
+          event: "message_end",
+          source: "pi",
+          harness_session_id: sessionFile,
+        },
+      },
+    ]
+  );
+});
+
 async function createDocxBuffer(lines: string[]): Promise<Buffer> {
   const zip = new JSZip();
   const body = lines.map((line) => `<w:p><w:r><w:t>${line}</w:t></w:r></w:p>`).join("");
@@ -102,11 +150,14 @@ async function createPptxBuffer(slides: string[]): Promise<Buffer> {
   return Buffer.from(await zip.generateAsync({ type: "uint8array" }));
 }
 
-function createXlsxBuffer(rows: string[][]): Buffer {
-  const workbook = XLSX.utils.book_new();
-  const worksheet = XLSX.utils.aoa_to_sheet(rows);
-  XLSX.utils.book_append_sheet(workbook, worksheet, "Sheet1");
-  return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }) as Buffer;
+async function createXlsxBuffer(rows: string[][]): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet("Sheet1");
+  rows.forEach((row) => {
+    worksheet.addRow(row);
+  });
+  const output = await workbook.xlsx.writeBuffer();
+  return Buffer.isBuffer(output) ? output : Buffer.from(output);
 }
 
 function createPdfBuffer(text: string): Buffer {
@@ -477,7 +528,7 @@ test("mapPiSessionEvent maps text, thinking, tool, and completion events", () =>
   assert.deepEqual(
     mapPiSessionEvent(
       {
-        type: "auto_compaction_start",
+        type: "compaction_start",
         reason: "threshold",
       },
       sessionFile,
@@ -498,7 +549,8 @@ test("mapPiSessionEvent maps text, thinking, tool, and completion events", () =>
   assert.deepEqual(
     mapPiSessionEvent(
       {
-        type: "auto_compaction_end",
+        type: "compaction_end",
+        reason: "threshold",
         result: {
           summary: "Kept the latest implementation details.",
           firstKeptEntryId: "entry-1",
@@ -1061,7 +1113,10 @@ test("buildPiProviderConfig registers runtime-configured ollama models for the P
     };
 
     const authStorage = AuthStorage.create(path.join(stateDir, "auth.json"));
-    const modelRegistry = new ModelRegistry(authStorage, path.join(stateDir, "models.json"));
+    const modelRegistry = ModelRegistry.create(
+      authStorage,
+      path.join(stateDir, "models.json"),
+    );
     modelRegistry.registerProvider(request.provider_id, buildPiProviderConfig(request));
 
     const model = modelRegistry.find("ollama_direct", "qwen2.5:0.5b");
@@ -1325,11 +1380,12 @@ test("runPi emits run_started and terminal success when the session completes", 
         },
       });
       this.listener?.({
-        type: "auto_compaction_start",
+        type: "compaction_start",
         reason: "threshold",
       });
       this.listener?.({
-        type: "auto_compaction_end",
+        type: "compaction_end",
+        reason: "threshold",
         result: {
           summary: "Compacted older context.",
           firstKeptEntryId: "entry-1",
@@ -1587,7 +1643,7 @@ test("buildPiPromptPayload inlines native images, extracts common document forma
   const imageBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
   const docxBytes = await createDocxBuffer(["Quarterly plan", "Ship the feature"]);
   const pptxBytes = await createPptxBuffer(["Roadmap", "Launch"]);
-  const xlsxBytes = createXlsxBuffer([
+  const xlsxBytes = await createXlsxBuffer([
     ["Name", "Value"],
     ["alpha", "1"],
   ]);
