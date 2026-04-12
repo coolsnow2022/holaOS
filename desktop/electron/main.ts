@@ -5248,6 +5248,10 @@ function emitAuthAuthenticated(user: AuthUserPayload) {
   if (authPopupWindow && !authPopupWindow.isDestroyed()) {
     authPopupWindow.webContents.send("auth:authenticated", user);
   }
+  // Notify any pending 401 retry waiters that auth completed.
+  for (const listener of gatewayAuthCallbackListeners) {
+    listener();
+  }
 }
 
 function emitAuthUserUpdated(user: AuthUserPayload | null) {
@@ -5258,6 +5262,13 @@ function emitAuthUserUpdated(user: AuthUserPayload | null) {
   if (authPopupWindow && !authPopupWindow.isDestroyed()) {
     authPopupWindow.webContents.send("auth:userUpdated", user);
   }
+  // Notify 401 retry waiters — auth succeeded via session recovery
+  // (handles callback paths C/D where emitAuthAuthenticated is not called).
+  if (user) {
+    for (const listener of gatewayAuthCallbackListeners) {
+      listener();
+    }
+  }
 }
 
 function emitAuthError(payload: AuthErrorPayload) {
@@ -5267,6 +5278,11 @@ function emitAuthError(payload: AuthErrorPayload) {
   }
   if (authPopupWindow && !authPopupWindow.isDestroyed()) {
     authPopupWindow.webContents.send("auth:error", payload);
+  }
+  // Reject any pending 401 retry waiters so they fail fast instead of
+  // hanging until the 2-minute timeout.
+  for (const listener of gatewayAuthErrorListeners) {
+    listener(payload);
   }
 }
 
@@ -6311,13 +6327,22 @@ async function controlPlaneHeaders(
   _service: "projects" | "marketplace" | "proactive",
   extraHeaders?: Record<string, string>,
 ): Promise<Record<string, string>> {
-  // All services route through the Hono gateway which adds the API key.
-  // No Cookie header — it triggers CORS preflight in Electron's fetch.
-  // User identity is passed via holaboss_user_id in request params/body.
-  return {
+  const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...extraHeaders,
   };
+  // Send Better Auth session cookie so the Hono gateway can resolve
+  // the user identity. Main-process fetch is not subject to browser
+  // CORS — the earlier "no Cookie" comment was about renderer-process
+  // constraints that don't apply here.
+  // TODO(phase-2): Once the Python backend reads X-Holaboss-User-Id
+  // from the gateway-injected header, remove holaboss_user_id from
+  // request bodies in requestControlPlaneJson callers.
+  const cookie = authCookieHeader();
+  if (cookie) {
+    headers["Cookie"] = cookie;
+  }
+  return headers;
 }
 
 function proactiveBaseUrl() {
@@ -6364,6 +6389,49 @@ async function readControlPlaneError(response: Response) {
   } catch {
     return text;
   }
+}
+
+/**
+ * Deduplicates concurrent 401 sign-in prompts.
+ * Opens the sign-in browser once, then waits for the auth callback
+ * (deep link → handleAuthCallbackUrl → emitAuthAuthenticated or
+ * emitAuthUserUpdated) before resolving. Rejects early on emitAuthError.
+ * Callers retry their request after this resolves.
+ */
+let pendingGatewayAuthRetry: Promise<void> | null = null;
+
+/** Listeners notified when emitAuthAuthenticated or emitAuthUserUpdated(non-null) fires. */
+const gatewayAuthCallbackListeners = new Set<() => void>();
+
+/** Listeners notified when emitAuthError fires so waiters reject promptly. */
+const gatewayAuthErrorListeners = new Set<(err: AuthErrorPayload) => void>();
+
+function waitForAuthCallback(timeoutMs = 120_000): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      gatewayAuthCallbackListeners.delete(successListener);
+      gatewayAuthErrorListeners.delete(errorListener);
+    };
+
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error("Sign-in timed out."));
+    }, timeoutMs);
+
+    const successListener = () => {
+      cleanup();
+      resolve();
+    };
+
+    const errorListener = (err: AuthErrorPayload) => {
+      cleanup();
+      reject(new Error(err.message ?? "Sign-in failed."));
+    };
+
+    gatewayAuthCallbackListeners.add(successListener);
+    gatewayAuthErrorListeners.add(errorListener);
+  });
 }
 
 async function requestControlPlaneJson<T>({
@@ -6435,6 +6503,28 @@ async function requestControlPlaneJson<T>({
     if (retried) {
       response = await executeRequest();
       errorDetail = "";
+    }
+  }
+  // If gateway returned 401 (session expired/missing), prompt sign-in and retry once.
+  // requestAuth() only opens the browser and resolves immediately — it does NOT
+  // wait for the user to complete sign-in. We wait for the auth callback
+  // (deep link → handleAuthCallbackUrl → emitAuthAuthenticated/emitAuthUserUpdated)
+  // before retrying. On auth failure/dismissal, emitAuthError rejects the wait.
+  if (response.status === 401 && desktopAuthClient) {
+    try {
+      if (!pendingGatewayAuthRetry) {
+        const authComplete = waitForAuthCallback();
+        requireAuthClient().requestAuth().catch(() => {});
+        pendingGatewayAuthRetry = authComplete.finally(() => {
+          pendingGatewayAuthRetry = null;
+        });
+      }
+      await pendingGatewayAuthRetry;
+      // Auth callback received — cookie is now fresh, retry
+      response = await executeRequest();
+      errorDetail = "";
+    } catch {
+      // User dismissed sign-in or auth failed — fall through to error
     }
   }
   if (!response.ok) {
