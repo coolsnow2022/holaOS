@@ -93,14 +93,16 @@ All deeper technical and product documentation lives at **[holaboss.ai/docs](htt
 | [Quick Start](https://www.holaboss.ai/docs/getting-started/) | The fastest path to a working local desktop environment |
 | [Learning Path](https://www.holaboss.ai/docs/getting-started/learning-path) | The technical path through the docs after setup |
 | [Concepts](https://www.holaboss.ai/docs/holaos/concepts) | Core system vocabulary for workspaces, runtime, memory, and outputs |
+| [Workspace Model](https://www.holaboss.ai/docs/holaos/workspace-model) | Workspace contract, authored surfaces, and runtime-owned state |
+| [Memory and Continuity](https://www.holaboss.ai/docs/holaos/memory-and-continuity) | Durable memory, continuity artifacts, and long-horizon resume behavior |
+| [Build Your First App](https://www.holaboss.ai/docs/app-development/applications/first-app) | Building workspace apps on top of holaOS |
+| [Runtime APIs](https://www.holaboss.ai/docs/build-on-holaos/runtime-apis) | The runtime operational surface for workspaces, runs, and app lifecycle |
+| [Independent Deploy](https://www.holaboss.ai/docs/build-on-holaos/independent-deploy) | Running the portable runtime without the desktop app |
+| [Local Setup](https://www.holaboss.ai/docs/build-on-holaos/developer-guide/local-setup) | The local developer path for desktop and runtime validation |
+| [Troubleshooting](https://www.holaboss.ai/docs/build-on-holaos/developer-guide/troubleshooting) | The common local runtime and desktop failure modes |
 | [Workspace Experience](https://www.holaboss.ai/docs/desktop/workspace-experience) | The desktop workspace surface built on top of holaOS |
-| [Workspace Model](https://www.holaboss.ai/docs/runtime/workspace-model) | Workspace contract, runtime-owned state, and filesystem layout |
-| [Memory and Continuity](https://www.holaboss.ai/docs/runtime/memory-and-continuity) | Durable memory, recall, continuity writeback, and evolve |
-| [Build Your First App](https://www.holaboss.ai/docs/app-development/first-app) | Building workspace apps on top of holaOS |
 | [Model Configuration](https://www.holaboss.ai/docs/desktop/model-configuration) | Providers, defaults, config precedence, and runtime model selection |
-| [Independent Deploy](https://www.holaboss.ai/docs/runtime/independent-deploy) | Running the portable runtime without the desktop app |
-| [Technical Details](https://www.holaboss.ai/docs/reference/technical-details) | Repo layout, common commands, and development notes |
-| [Reference](https://www.holaboss.ai/docs/reference/environment-variables) | Environment variables, workspace files, and supporting reference material |
+| [Reference](https://www.holaboss.ai/docs/reference/environment-variables) | Environment variables and supporting reference material |
 
 ## Manual Install
 
