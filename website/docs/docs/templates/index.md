@@ -1,70 +1,82 @@
 # Workspace Templates
 
-A workspace template is the reusable starting shape for a workspace.
+A workspace template is a reusable starting state for a workspace.
 
-It packages initial policy, skills, apps, and conventions so a new workspace begins from a known operating context instead of from an empty folder.
+In `holaOS`, a template is not an abstract concept. It is a file set that the desktop or runtime materializes into a workspace directory, then turns into a normal workspace with:
 
-## Why templates exist
+- `workspace.yaml`
+- `AGENTS.md`
+- optional `ONBOARD.md`
+- optional `skills/`
+- optional `apps/`
 
-Templates exist so workspace creation is reproducible, reusable, and portable.
+## Why Templates Matter
 
-They help with:
+Templates exist so workspace creation is reproducible and developer-controlled.
 
-- reproducible workspace creation
-- reusable operating environments
-- cleaner onboarding
-- portable starting points for specific workflows or domains
-- separation between portable authored state and transient runtime residue
+They let you:
 
-In `holaOS`, that portability matters because environment engineering is not only about execution continuity. It is also about being able to package and recreate an operating context cleanly.
+- start from a known runtime plan instead of an empty folder
+- package apps, skills, and policy together
+- keep onboarding material next to the workspace contract
+- pin marketplace templates to a ref or commit
+- export a clean workspace without bundling transient runtime residue
 
-## Template vs workspace vs app
+## The Four Creation Modes in Code
 
-Use the terms this way:
+The desktop workspace flow in `desktop/electron/main.ts` currently supports:
 
-| Surface | Main role |
+1. `empty`
+2. `empty_onboarding`
+3. local template folder via `template_root_path`
+4. marketplace template via `template_name` plus optional `template_ref` and `template_commit`
+
+The important behavior is this:
+
+- desktop always materializes template files locally
+- local folders must contain `workspace.yaml`
+- marketplace templates are materialized through `@holaboss/app-sdk`
+- the resulting workspace is then initialized as a normal git-backed workspace directory
+
+## Template vs Workspace vs App
+
+| Surface | Role |
 | --- | --- |
-| Template | The starting shape for a workspace |
-| Workspace | The live operating context after materialization |
-| App | A packaged capability installed inside a workspace |
+| Template | Reusable starting file set |
+| Workspace | Live materialized environment |
+| App | Capability installed inside a workspace |
 
-A template is not the live workspace itself. It is the reusable scaffold that becomes one.
+A template can include apps, but it is not itself an app.
 
-## How templates fit into holaOS
+## What Developers Should Optimize For
 
-Templates are one of the portability surfaces of the environment.
+A production-ready template should:
 
-They let `holaOS` keep a clean distinction between:
+- materialize cleanly without manual repair
+- produce a valid `workspace.yaml`
+- avoid shipping transient runtime files
+- make its starting policy obvious from the root files
+- document whether it is meant for local use, marketplace use, or both
 
-- the authored starting shape that should be reusable
-- the live workspace that accumulates state over time
-- the runtime residue that should not travel with the portable unit
-
-That is why templates sit alongside packaging boundaries in the environment story. They make a workspace reproducible without turning the runtime's transient state into part of the reusable artifact.
-
-## How a workspace gets created
-
-In practice, a workspace can be created from:
-
-- an empty scaffold
-- a local template folder
-- a marketplace template
-
-All of those paths should materialize into the same workspace model. The creation path can differ, but the resulting operating context should follow the same `holaOS` contracts.
-
-## Read next
+## Read Next
 
 <DocCards>
+  <DocCard
+    title="Template Materialization"
+    eyebrow="Creation Flow"
+    href="/templates/materialization"
+    description="See how local folders, marketplace templates, apply-template routes, and exports behave in code."
+  />
   <DocCard
     title="Template Structure"
     eyebrow="Workspace Shape"
     href="/templates/structure"
-    description="See the typical files, folders, and conventions that a workspace template should include."
+    description="See the files and conventions a template must include to materialize cleanly."
   />
   <DocCard
     title="Template Versioning"
     eyebrow="Release Policy"
     href="/templates/versioning"
-    description="See how to version templates so workspace creation stays reproducible across time."
+    description="See how to pin templates so workspace creation stays reproducible across time."
   />
 </DocCards>

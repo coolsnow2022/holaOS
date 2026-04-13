@@ -47,4 +47,10 @@ Start with the page that matches your goal:
     href="/holaos/concepts"
     description="Learn the core system vocabulary before moving deeper into runtime and workspace behavior."
   />
+  <DocCard
+    title="Build on holaOS"
+    eyebrow="Developer Path"
+    href="/build-on-holaos/"
+    description="Go straight to the code-truth developer path for desktop, runtime, apps, and templates."
+  />
 </DocCards>

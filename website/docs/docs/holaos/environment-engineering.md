@@ -137,7 +137,7 @@ That shift is what makes the system easier to inspect, package, resume, and exte
   <DocCard
     title="Build on holaOS"
     eyebrow="Developer Path"
-    href="/app-development/applications/first-app"
-    description="Move from the thesis into the practical path for building apps and templates."
+    href="/build-on-holaos/"
+    description="Move from the thesis into the concrete developer paths for runtime work, apps, and templates."
   />
 </DocCards>

@@ -1,56 +1,106 @@
 # Independent Deploy
 
-Holaboss runtime can be deployed independently of the Electron desktop app.
+Use this page when you want to run the packaged runtime without Electron. The source of truth is `runtime/deploy/`, not the desktop shell.
 
-This is the same runtime, packaged differently:
+It is the same runtime, packaged differently:
 
 - the desktop app starts it for local users
 - an independent deployment starts it directly on the target machine
 
-## Deploy shape
+## Bundle shape
 
-The standalone deploy flow is:
+Every platform packager produces the same high-level layout:
 
-1. build a platform-specific runtime bundle
-2. archive it as `tar.gz`
-3. extract it on the target machine
-4. launch `bin/sandbox-runtime`
-
-The runtime bundle includes the runtime app plus its packaged dependencies and runtime binaries. The desktop app uses the same entrypoint and environment contract.
-
-## Required environment
-
-The launcher environment should stay aligned with desktop startup. The important variables are:
-
-| Variable | Purpose |
-| --- | --- |
-| `HB_SANDBOX_ROOT` | runtime workspace and state root |
-| `SANDBOX_AGENT_BIND_HOST` | runtime API bind host |
-| `SANDBOX_AGENT_BIND_PORT` | runtime API bind port |
-| `SANDBOX_AGENT_HARNESS` | harness selector |
-| `HOLABOSS_RUNTIME_WORKFLOW_BACKEND` | workflow backend selector |
-| `HOLABOSS_RUNTIME_DB_PATH` | SQLite runtime DB path |
-| `PROACTIVE_ENABLE_REMOTE_BRIDGE` | enable remote bridge flows |
-| `PROACTIVE_BRIDGE_BASE_URL` | remote bridge base URL |
-
-## Health check
-
-Once the runtime is up, verify it with:
-
-```bash
-curl http://127.0.0.1:8080/healthz
+```text
+<bundle-root>/
+  bin/
+    sandbox-runtime            # or sandbox-runtime.cmd on Windows
+  runtime/
+    api-server/
+    harness-host/
+    state-store/
+    harnesses/
+    bootstrap/
+    metadata.json
+  node-runtime/
+  python-runtime/
+  package-metadata.json
 ```
 
-If you need the runtime to accept connections from other machines, bind to `0.0.0.0` instead of `127.0.0.1`.
+`runtime/deploy/build_runtime_root.sh` and `build_runtime_root.mjs` assemble the built `runtime/` tree. The platform packagers then add the bundled Node runtime, bundled Python runtime, the launcher under `bin/`, and `package-metadata.json`.
 
-## Linux example
+## Build the bundle
+
+Linux:
 
 ```bash
 bash runtime/deploy/package_linux_runtime.sh out/runtime-linux
 tar -C out -czf out/holaboss-runtime-linux.tar.gz runtime-linux
 ```
 
-Install and run:
+macOS:
+
+```bash
+bash runtime/deploy/package_macos_runtime.sh out/runtime-macos
+tar -C out -czf out/holaboss-runtime-macos.tar.gz runtime-macos
+```
+
+Windows:
+
+```bash
+node runtime/deploy/package_windows_runtime.mjs out/runtime-windows
+powershell -Command "Compress-Archive -Path out/runtime-windows -DestinationPath out/holaboss-runtime-windows.zip -Force"
+```
+
+`package_windows_runtime.mjs` must run on a Windows host. It intentionally refuses to build a Windows bundle from a non-Windows machine.
+
+## What the launcher does on startup
+
+The packaged launcher under `bin/sandbox-runtime` is thin. The real startup behavior lives in `runtime/deploy/bootstrap/shared.sh` for macOS and Linux and in `runtime/deploy/bootstrap/windows.mjs` for Windows.
+
+At startup it:
+
+1. Resolves `HB_SANDBOX_ROOT` or falls back to `/holaboss` on macOS and Linux and `%LOCALAPPDATA%\\holaboss` on Windows.
+2. Creates `workspace/`, `memory/`, and `state/` under that sandbox root.
+3. Sets `SANDBOX_RUNTIME_API_HOST` and `SANDBOX_RUNTIME_API_PORT` from `SANDBOX_AGENT_BIND_HOST` and `SANDBOX_AGENT_BIND_PORT` if needed.
+4. Sets `HOLABOSS_MODEL_PROXY_BASE_URL_DEFAULT=http://127.0.0.1:3060/api/v1/model-proxy` unless you override it.
+5. Executes `runtime/api-server/dist/index.mjs` from the packaged runtime tree.
+
+## Filesystem contract on the target machine
+
+By default, the runtime owns this directory shape under `HB_SANDBOX_ROOT`:
+
+```text
+$HB_SANDBOX_ROOT/
+  workspace/
+  memory/
+  state/
+    runtime.db
+    runtime-config.json
+```
+
+`runtime-config.json` defaults to `HB_SANDBOX_ROOT/state/runtime-config.json` unless `HOLABOSS_RUNTIME_CONFIG_PATH` overrides it.
+
+## Config developers usually care about
+
+| Variable | Why you set it |
+| --- | --- |
+| `HB_SANDBOX_ROOT` | Choose where the runtime keeps workspace, memory, and state data |
+| `HOLABOSS_RUNTIME_CONFIG_PATH` | Override the default `state/runtime-config.json` location |
+| `SANDBOX_AGENT_BIND_HOST` | Bind the runtime to a specific host |
+| `SANDBOX_AGENT_BIND_PORT` | Bind the runtime to a specific port |
+| `SANDBOX_AGENT_HARNESS` | Select the harness path, currently `pi` in OSS |
+| `HOLABOSS_RUNTIME_DB_PATH` | Override the SQLite runtime DB path used by `runtime/state-store` |
+| `HOLABOSS_SANDBOX_AUTH_TOKEN` | Provide product auth when you are running against the Holaboss-backed model proxy path |
+| `HOLABOSS_USER_ID` | Provide the runtime user identity for auth-backed flows |
+| `HOLABOSS_MODEL_PROXY_BASE_URL` | Override the model-proxy base URL instead of relying on the default |
+| `HOLABOSS_DEFAULT_MODEL` | Change the default selected model |
+
+Optional product-facing env such as `HOLABOSS_RUNTIME_WORKFLOW_BACKEND`, `PROACTIVE_ENABLE_REMOTE_BRIDGE`, and `PROACTIVE_BRIDGE_BASE_URL` are only needed when you want standalone runtime behavior to match the desktop-backed workflow path.
+
+## Install and run examples
+
+Linux:
 
 ```bash
 sudo mkdir -p /opt/holaboss
@@ -69,14 +119,7 @@ PROACTIVE_BRIDGE_BASE_URL=https://your-bridge.example \
 holaboss-runtime
 ```
 
-## macOS example
-
-```bash
-bash runtime/deploy/package_macos_runtime.sh out/runtime-macos
-tar -C out -czf out/holaboss-runtime-macos.tar.gz runtime-macos
-```
-
-Install and run:
+macOS:
 
 ```bash
 sudo mkdir -p /opt/holaboss
@@ -95,16 +138,7 @@ PROACTIVE_BRIDGE_BASE_URL=https://your-bridge.example \
 holaboss-runtime
 ```
 
-## Windows example
-
-Build the Windows runtime bundle on a Windows host:
-
-```bash
-node runtime/deploy/package_windows_runtime.mjs out/runtime-windows
-powershell -Command "Compress-Archive -Path out/runtime-windows -DestinationPath out/holaboss-runtime-windows.zip -Force"
-```
-
-Install and run:
+Windows:
 
 ```powershell
 New-Item -ItemType Directory -Force C:\Holaboss | Out-Null
@@ -121,6 +155,18 @@ $env:PROACTIVE_BRIDGE_BASE_URL="https://your-bridge.example"
 
 C:\Holaboss\runtime-windows\bin\sandbox-runtime.cmd
 ```
+
+## Smoke test a packaged runtime
+
+After extraction, verify the packaged files before you debug app behavior:
+
+```bash
+ls package-metadata.json runtime/metadata.json
+curl http://127.0.0.1:8080/healthz
+curl http://127.0.0.1:8080/api/v1/runtime/status
+```
+
+If you changed the bind port, query that port instead.
 
 ## What stays the same
 

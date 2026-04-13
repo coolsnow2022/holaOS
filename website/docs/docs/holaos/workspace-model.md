@@ -152,6 +152,13 @@ The diagram above is the canonical filesystem layout. The sections below explain
 
 `workspace.yaml` is the root runtime plan for the workspace. It describes the active agent, skill ordering, workspace commands, MCP registry, and the apps installed into the workspace.
 
+For app development, two fields matter immediately:
+
+- `applications[].app_id`
+- `applications[].config_path`
+
+Those entries are how the runtime finds each app manifest under `apps/`.
+
 ### `.git/`
 
 Desktop-created workspaces are initialized as local git repositories after their scaffold or template is materialized. That repository is intended for agent-owned local version control checkpoints rather than remote sync. Lower-level workspace creation does not make local git initialization a universal runtime invariant by itself.
@@ -171,6 +178,8 @@ Workspace skills live under `skills/`. The runtime loads them from the workspace
 ### `apps/`
 
 Workspace-local apps live under `apps/<app-id>/`. Each app must provide `app.runtime.yaml`, which is the runtime contract for lifecycle and integration behavior.
+
+If you are changing app behavior, continue into [App Anatomy](/app-development/applications/app-anatomy) rather than treating this page as the full contract reference.
 
 ### `.holaboss/`
 
@@ -219,3 +228,5 @@ That split is why the filesystem contract and the runtime continuity contract ne
 - resolve integration requirements (which external services the app needs access to)
 
 The runtime does not care what framework the app uses internally. It only needs the declared contract. See the [app.runtime.yaml reference](/app-development/applications/app-runtime-yaml) for the full field guide including integration declarations.
+
+If you are changing workspace creation or reusable scaffolds instead of an installed app, continue into [Template Materialization](/templates/materialization).

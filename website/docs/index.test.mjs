@@ -46,8 +46,96 @@ const QUICK_START_PATH = new URL(
   "./docs/getting-started/index.md",
   import.meta.url
 );
+const START_DEVELOPING_PATH = new URL(
+  "./docs/build-on-holaos/start-developing/index.md",
+  import.meta.url
+);
+const BUILD_ON_OVERVIEW_PATH = new URL(
+  "./docs/build-on-holaos/index.md",
+  import.meta.url
+);
+const CONTRIBUTING_PATH = new URL(
+  "./docs/build-on-holaos/start-developing/contributing.md",
+  import.meta.url
+);
+const DESKTOP_INTERNALS_PATH = new URL(
+  "./docs/build-on-holaos/desktop/internals.md",
+  import.meta.url
+);
+const RUNTIME_APIS_PATH = new URL(
+  "./docs/build-on-holaos/runtime-apis.md",
+  import.meta.url
+);
+const INDEPENDENT_DEPLOY_PATH = new URL(
+  "./docs/build-on-holaos/independent-deploy.md",
+  import.meta.url
+);
+const HARNESS_INTERNALS_PATH = new URL(
+  "./docs/build-on-holaos/agent-harness/internals.md",
+  import.meta.url
+);
 const TROUBLESHOOTING_PATH = new URL(
   "./docs/build-on-holaos/troubleshooting.md",
+  import.meta.url
+);
+const BRIDGE_SDK_PATH = new URL(
+  "./docs/app-development/bridge-sdk.md",
+  import.meta.url
+);
+const APP_ANATOMY_PATH = new URL(
+  "./docs/app-development/applications/app-anatomy.md",
+  import.meta.url
+);
+const FIRST_APP_PATH = new URL(
+  "./docs/app-development/applications/first-app.md",
+  import.meta.url
+);
+const APP_RUNTIME_YAML_PATH = new URL(
+  "./docs/app-development/applications/app-runtime-yaml.md",
+  import.meta.url
+);
+const MCP_TOOLS_PATH = new URL(
+  "./docs/app-development/applications/mcp-tools.md",
+  import.meta.url
+);
+const PUBLISHING_OUTPUTS_PATH = new URL(
+  "./docs/app-development/applications/publishing-outputs.md",
+  import.meta.url
+);
+const TEMPLATES_OVERVIEW_PATH = new URL(
+  "./docs/templates/index.md",
+  import.meta.url
+);
+const TEMPLATES_MATERIALIZATION_PATH = new URL(
+  "./docs/templates/materialization.md",
+  import.meta.url
+);
+const TEMPLATES_STRUCTURE_PATH = new URL(
+  "./docs/templates/structure.md",
+  import.meta.url
+);
+const TEMPLATES_VERSIONING_PATH = new URL(
+  "./docs/templates/versioning.md",
+  import.meta.url
+);
+const LEARNING_PATH_PATH = new URL(
+  "./docs/getting-started/learning-path.md",
+  import.meta.url
+);
+const HOLAOS_APPS_PATH = new URL(
+  "./docs/holaos/apps.md",
+  import.meta.url
+);
+const HOLAOS_CONCEPTS_PATH = new URL(
+  "./docs/holaos/concepts.md",
+  import.meta.url
+);
+const HOLAOS_WORKSPACE_MODEL_PATH = new URL(
+  "./docs/holaos/workspace-model.md",
+  import.meta.url
+);
+const ENVIRONMENT_ENGINEERING_PATH = new URL(
+  "./docs/holaos/environment-engineering.md",
   import.meta.url
 );
 
@@ -79,6 +167,7 @@ test("vitepress config is set up for the agreed documentation structure", async 
   assert.match(source, /text:\s*"Build on holaOS"/);
   assert.match(source, /text:\s*"Reference"/);
   assert.match(source, /text:\s*"Runtime"/);
+  assert.match(source, /"\/build-on-holaos\/"/);
   assert.match(source, /"\/getting-started\/"/);
   assert.match(source, /"\/getting-started\/learning-path"/);
   assert.match(source, /"\/holaos\/concepts"/);
@@ -96,6 +185,7 @@ test("vitepress config is set up for the agreed documentation structure", async 
   assert.match(source, /"\/build-on-holaos\/desktop\/internals"/);
   assert.match(source, /"\/app-development\/applications\/first-app"/);
   assert.match(source, /"\/templates\/"/);
+  assert.match(source, /"\/templates\/materialization"/);
   assert.match(source, /"\/templates\/structure"/);
   assert.match(source, /"\/build-on-holaos\/runtime-apis"/);
   assert.match(source, /"\/build-on-holaos\/independent-deploy"/);
@@ -156,6 +246,132 @@ test("docs pages point to the holaOS repository instead of the legacy repo path"
   assert.match(troubleshooting, /github\.com\/holaboss-ai\/holaOS\/issues\/new\/choose/);
   assert.doesNotMatch(quickStart, /holaboss-ai\/holaboss-ai/);
   assert.doesNotMatch(troubleshooting, /holaboss-ai\/holaboss-ai/);
+});
+
+test("build on holaOS pages expose the real developer seams and validation paths", async () => {
+  const buildOnOverview = await readFile(BUILD_ON_OVERVIEW_PATH, "utf8");
+  const startDeveloping = await readFile(START_DEVELOPING_PATH, "utf8");
+  const contributing = await readFile(CONTRIBUTING_PATH, "utf8");
+  const desktopInternals = await readFile(DESKTOP_INTERNALS_PATH, "utf8");
+  const runtimeApis = await readFile(RUNTIME_APIS_PATH, "utf8");
+  const independentDeploy = await readFile(INDEPENDENT_DEPLOY_PATH, "utf8");
+  const harnessInternals = await readFile(HARNESS_INTERNALS_PATH, "utf8");
+  const troubleshooting = await readFile(TROUBLESHOOTING_PATH, "utf8");
+
+  assert.match(buildOnOverview, /Template Materialization/);
+  assert.match(buildOnOverview, /npm run runtime:test/);
+  assert.match(buildOnOverview, /\/build-on-holaos\/desktop\/internals/);
+
+  assert.match(startDeveloping, /npm run desktop:dev/);
+  assert.match(startDeveloping, /desktop\/scripts\/watch-runtime-bundle\.mjs/);
+  assert.match(startDeveloping, /desktop\/out\/runtime-<platform>/);
+  assert.match(startDeveloping, /http:\/\/127\.0\.0\.1:5060/);
+
+  assert.match(contributing, /Conventional Commits/);
+  assert.match(contributing, /npm run docs:test/);
+  assert.match(contributing, /desktop\/electron\/preload\.ts/);
+
+  assert.match(desktopInternals, /handleTrustedIpc/);
+  assert.match(desktopInternals, /HB_SANDBOX_ROOT/);
+  assert.match(desktopInternals, /runtime\.log/);
+
+  assert.match(runtimeApis, /runtime\/api-server\/src\/app\.ts/);
+  assert.match(runtimeApis, /\/api\/v1\/agent-runs\/stream/);
+  assert.match(runtimeApis, /\/api\/v1\/task-proposals\/unreviewed\/stream/);
+  assert.match(runtimeApis, /runtime\/api-server\/src\/app\.test\.ts/);
+
+  assert.match(independentDeploy, /package-metadata\.json/);
+  assert.match(independentDeploy, /runtime\/metadata\.json/);
+  assert.match(independentDeploy, /HB_SANDBOX_ROOT/);
+  assert.match(independentDeploy, /runtime\/deploy\/build_runtime_root/);
+
+  assert.match(harnessInternals, /runtime\/api-server\/src\/ts-runner\.ts/);
+  assert.match(harnessInternals, /runtime\/harness-host\/src\/pi\.ts/);
+  assert.match(harnessInternals, /npm run runtime:harness-host:test/);
+
+  assert.match(troubleshooting, /desktop\/scripts\/check-runtime-status\.sh/);
+  assert.match(troubleshooting, /HOLABOSS_BACKEND_BASE_URL/);
+  assert.match(troubleshooting, /workspace_session/);
+  assert.match(troubleshooting, /desktop\/out\/runtime-/);
+});
+
+test("app development and templates pages expose runtime-true developer contracts", async () => {
+  const bridgeSdk = await readFile(BRIDGE_SDK_PATH, "utf8");
+  const appAnatomy = await readFile(APP_ANATOMY_PATH, "utf8");
+  const firstApp = await readFile(FIRST_APP_PATH, "utf8");
+  const appRuntimeYaml = await readFile(APP_RUNTIME_YAML_PATH, "utf8");
+  const mcpTools = await readFile(MCP_TOOLS_PATH, "utf8");
+  const publishingOutputs = await readFile(PUBLISHING_OUTPUTS_PATH, "utf8");
+  const templatesOverview = await readFile(TEMPLATES_OVERVIEW_PATH, "utf8");
+  const templatesMaterialization = await readFile(
+    TEMPLATES_MATERIALIZATION_PATH,
+    "utf8"
+  );
+  const templatesStructure = await readFile(TEMPLATES_STRUCTURE_PATH, "utf8");
+  const templatesVersioning = await readFile(TEMPLATES_VERSIONING_PATH, "utf8");
+
+  assert.match(bridgeSdk, /HOLABOSS_INTEGRATION_BROKER_URL/);
+  assert.match(bridgeSdk, /resolveHolabossTurnContext/);
+  assert.match(bridgeSdk, /npm run sdk:bridge:test/);
+
+  assert.match(appAnatomy, /runtime\/api-server\/src\/app-lifecycle-worker\.ts/);
+  assert.match(appAnatomy, /GET http:\/\/localhost:\$PORT\//);
+  assert.match(appAnatomy, /HOLABOSS_APP_GRANT/);
+
+  assert.match(firstApp, /POST \/api\/v1\/apps\/install-archive/);
+  assert.match(firstApp, /workspace\.yaml/);
+  assert.match(firstApp, /mcp\.tools/);
+
+  assert.match(appRuntimeYaml, /credential_source/);
+  assert.match(appRuntimeYaml, /mcp\.port/);
+  assert.match(appRuntimeYaml, /timeout_s/);
+
+  assert.match(mcpTools, /writeWorkspaceMcpRegistryEntry/);
+  assert.match(mcpTools, /app_id\.tool_name/);
+  assert.match(mcpTools, /runtime\/api-server\/src\/app\.test\.ts/);
+
+  assert.match(publishingOutputs, /publishSessionArtifact/);
+  assert.match(publishingOutputs, /x-holaboss-session-id/);
+  assert.match(publishingOutputs, /buildAppResourcePresentation/);
+
+  assert.match(templatesOverview, /empty_onboarding/);
+  assert.match(templatesOverview, /@holaboss\/app-sdk/);
+
+  assert.match(templatesMaterialization, /apply-template-from-url/);
+  assert.match(templatesMaterialization, /replace_existing/);
+  assert.match(templatesMaterialization, /GET \/api\/v1\/workspaces\/:workspaceId\/export/);
+
+  assert.match(templatesStructure, /parseLocalTemplateMetadata/);
+  assert.match(templatesStructure, /workspace\.yaml/);
+  assert.match(templatesStructure, /\.hb_template_bootstrap_tmp/);
+
+  assert.match(templatesVersioning, /template_commit/);
+  assert.match(templatesVersioning, /renderMinimalWorkspaceYaml/);
+  assert.match(templatesVersioning, /repo: "local"/);
+});
+
+test("high-level docs route developers into the concrete builder pages", async () => {
+  const learningPath = await readFile(LEARNING_PATH_PATH, "utf8");
+  const holaosApps = await readFile(HOLAOS_APPS_PATH, "utf8");
+  const concepts = await readFile(HOLAOS_CONCEPTS_PATH, "utf8");
+  const workspaceModel = await readFile(HOLAOS_WORKSPACE_MODEL_PATH, "utf8");
+  const environmentEngineering = await readFile(
+    ENVIRONMENT_ENGINEERING_PATH,
+    "utf8"
+  );
+  const quickStart = await readFile(QUICK_START_PATH, "utf8");
+  const docsIndex = await readFile(new URL("./docs/index.md", import.meta.url), "utf8");
+
+  assert.match(learningPath, /\/build-on-holaos\//);
+  assert.match(holaosApps, /applications:/);
+  assert.match(holaosApps, /mcp\.tools/);
+  assert.match(concepts, /workspace registers it under `applications\[\]`/);
+  assert.match(concepts, /\/build-on-holaos\//);
+  assert.match(workspaceModel, /applications\[\]\.app_id/);
+  assert.match(workspaceModel, /\/templates\/materialization/);
+  assert.match(environmentEngineering, /\/build-on-holaos\//);
+  assert.match(quickStart, /\/build-on-holaos\/start-developing\//);
+  assert.match(docsIndex, /\/build-on-holaos\//);
 });
 
 test("vitepress theme extends the default theme and registers shared doc components", async () => {

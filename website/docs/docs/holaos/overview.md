@@ -28,7 +28,7 @@ Use [Overview](/) for the merged entry page, then continue with [Environment Eng
   <DocCard
     title="Build on holaOS"
     eyebrow="Developer Path"
-    href="/app-development/applications/first-app"
-    description="Move from the technical vision into the practical path for building apps and templates."
+    href="/build-on-holaos/"
+    description="Move from the technical vision into the concrete developer path for runtime work, apps, and templates."
   />
 </DocCards>

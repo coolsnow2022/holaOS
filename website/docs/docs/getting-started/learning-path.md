@@ -30,9 +30,9 @@ Read [Agent Harness](/holaos/agent-harness/) and [Runtime APIs](/build-on-holaos
 Read [Start Developing](/build-on-holaos/start-developing/) before you jump into app code so your local desktop/runtime setup matches the actual OSS contributor path.
 
   </DocStep>
-  <DocStep title="Build or install apps">
+  <DocStep title="Choose a builder track">
 
-If you are extending the system, continue into [Build Your First App](/app-development/applications/first-app) and start from the workspace app path.
+If you are extending the system, continue into [Build on holaOS](/build-on-holaos/) and pick the app, template, runtime, or desktop path that matches the code you are changing.
 
   </DocStep>
 </DocSteps>
@@ -81,7 +81,7 @@ Use this docs site when you want the technical and developer view:
   <DocCard
     title="Build on holaOS"
     eyebrow="Developer Path"
-    href="/app-development/applications/first-app"
-    description="Build workspace apps, define MCP tools, and publish outputs back into the environment."
+    href="/build-on-holaos/"
+    description="Choose the real developer path for local setup, runtime work, app contracts, and template materialization."
   />
 </DocCards>

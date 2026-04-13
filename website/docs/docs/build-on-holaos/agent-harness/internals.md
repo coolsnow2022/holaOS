@@ -1,10 +1,24 @@
 # Internals and Contracts
 
-Use this page when you are expanding the harness boundary itself rather than only building apps or templates.
+Use this page when you are changing the execution boundary itself rather than only building apps or templates.
 
 In `holaOS`, a harness path is not only the underlying executor. It is the runtime adapter, the runtime plugin, the harness-host plugin, and the executor underneath them as one execution boundary.
 
 The runtime intentionally splits that boundary so a new executor can fit into the same `holaOS` environment model without redefining memory, continuity, or the workspace contract.
+
+## Follow the current run path first
+
+For the shipped `pi` path, a single run currently moves through these seams:
+
+1. `runtime/api-server/src/ts-runner.ts`: compiles the workspace runtime plan, stages MCP and app state, loads or persists harness session state, and decides which harness plugin to use.
+2. `runtime/api-server/src/agent-runtime-config.ts`: projects prompt layers, capability manifests, selected model client config, and the tool map passed into the harness.
+3. `runtime/api-server/src/harness-registry.ts`: selects the runtime harness plugin, timeout behavior, browser tools, runtime tools, and MCP preparation policy.
+4. `runtime/harnesses/src/pi.ts`: builds the reduced host request that crosses from runtime code into the harness host.
+5. `runtime/harness-host/src/index.ts`: dispatches the registered host plugin by command.
+6. `runtime/harness-host/src/pi.ts`: creates the Pi session, loads skills, injects runtime and browser tools, materializes allowlisted MCP tools, enforces workspace boundaries, and maps native events back out.
+7. `runtime/harness-host/src/contracts.ts`: defines the normalized runner event types that the host emits back to the runtime.
+
+If you are unsure where a behavior belongs, trace this path before you patch anything.
 
 ## Main code seams
 
@@ -20,6 +34,14 @@ The runtime intentionally splits that boundary so a new executor can fit into th
 - `runtime/harness-host/src/pi-runtime-tools.ts`: runtime-managed tool bridge for onboarding, cronjobs, and image generation.
 - `runtime/harness-host/src/pi-web-search.ts`: hosted native web search bridge for the current `web_search` tool.
 - `runtime/harnesses/src/desktop-browser-tools.ts`, `runtime/harnesses/src/runtime-agent-tools.ts`, and `runtime/harnesses/src/native-web-search-tools.ts`: canonical ids and descriptions for the projected browser, runtime, and native web-search surfaces.
+
+## Change the right seam
+
+- If you are changing prompt layers, model selection, or capability projection, start in `runtime/api-server/src/agent-runtime-config.ts`.
+- If you are changing run bootstrap, session reuse, or the order of preparation steps, start in `runtime/api-server/src/ts-runner.ts`.
+- If you are changing which tools the harness can see, inspect both `runtime/api-server/src/harness-registry.ts` and the tool-definition files under `runtime/harnesses/src/`.
+- If you are changing event normalization, waiting-user behavior, or tool-call event mapping, inspect `runtime/harness-host/src/contracts.ts` and `runtime/harness-host/src/pi.ts`.
+- If you are adding a brand-new harness path, you need a runtime adapter, a host implementation, registry wiring, and tests for the new boundary.
 
 ## How to add another harness path
 
@@ -38,13 +60,12 @@ The runtime intentionally splits that boundary so a new executor can fit into th
 - Skills stay explicit. If a harness supports skill-driven widening, keep the widening rules inspectable and tied to skill metadata.
 - The harness should receive a reduced execution package, not uncontrolled access to the whole product state.
 
-## Current implementation notes
+## Validation
 
-Today the shipped harness path is `pi`, backed by the `pi` adapter, the runtime plugin wiring, the `pi` host implementation, and the Pi-based executor. The easiest way to understand the current flow is:
+```bash
+npm run runtime:harness-host:test
+npm run runtime:api-server:test
+npm run runtime:test
+```
 
-1. Start in `runtime/harnesses/src/pi.ts`.
-2. Follow registration through `runtime/api-server/src/harness-registry.ts`.
-3. Trace run bootstrap in `runtime/api-server/src/ts-runner.ts`.
-4. Inspect the actual host implementation in `runtime/harness-host/src/pi.ts`.
-
-That sequence will show you where the stable boundary is, where capability projection happens, and where a future harness would need to plug in.
+Use the package-specific test commands while you iterate, then run the full runtime suite before review.

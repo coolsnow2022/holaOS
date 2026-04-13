@@ -27,7 +27,7 @@ export default defineConfig({
       },
       {
         text: "Build on holaOS",
-        link: "/app-development/applications/first-app",
+        link: "/build-on-holaos/",
         activeMatch: "^/(app-development/|templates/|build-on-holaos/)",
       },
       {
@@ -113,6 +113,10 @@ export default defineConfig({
         text: "Build on holaOS",
         items: [
           {
+            text: "Overview",
+            link: "/build-on-holaos/",
+          },
+          {
             text: "Start Developing",
             link: "/build-on-holaos/start-developing/",
           },
@@ -191,6 +195,10 @@ export default defineConfig({
             collapsed: true,
             items: [
               { text: "Overview", link: "/templates/" },
+              {
+                text: "Template Materialization",
+                link: "/templates/materialization",
+              },
               { text: "Template Structure", link: "/templates/structure" },
               { text: "Template Versioning", link: "/templates/versioning" },
             ],

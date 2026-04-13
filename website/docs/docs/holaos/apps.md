@@ -34,6 +34,20 @@ An app can own:
 
 Those pieces are not arbitrary implementation details. They are the surfaces that make a capability durable, inspectable, and reusable inside a workspace.
 
+## How an app enters a workspace in code
+
+In the current runtime, an app is not discovered by convention alone. It becomes runtime-managed when the workspace declares it in `workspace.yaml`:
+
+```yaml
+applications:
+  - app_id: my_app
+    config_path: apps/my_app/app.runtime.yaml
+```
+
+From there the runtime resolves `apps/my_app/app.runtime.yaml`, assigns ports, injects runtime and integration environment variables, runs the lifecycle, performs health checks, and reconciles MCP registry state if the app declares `mcp.tools`.
+
+That is the practical boundary between "some local code in the workspace" and "an app the runtime actually owns."
+
 ## What apps are not
 
 Apps are not:
@@ -97,6 +111,8 @@ For builders, the app layer gives `holaOS` a clean extension model:
 - workspaces can compose multiple capabilities cleanly
 - the same environment model can outlive one harness or desktop implementation
 
+If you are building an app now, do not stop at this conceptual page. The next layer is the runtime contract: app registration, manifest fields, lifecycle, MCP registry writes, and output publishing.
+
 ## Read next
 
 <DocCards>
@@ -113,15 +129,21 @@ For builders, the app layer gives `holaOS` a clean extension model:
     description="Move from the system model into the concrete path for creating a workspace app."
   />
   <DocCard
-    title="Bridge SDK"
-    eyebrow="Integration Layer"
-    href="/app-development/bridge-sdk"
-    description="See how apps talk to the runtime broker, publish outputs, and call external services through one app-facing SDK."
+    title="MCP Tools"
+    eyebrow="Tool Surface"
+    href="/app-development/applications/mcp-tools"
+    description="See how `mcp.tools` becomes workspace MCP registry state and what the runtime expects from a healthy MCP app."
   />
   <DocCard
     title="app.runtime.yaml"
     eyebrow="Runtime Contract"
     href="/app-development/applications/app-runtime-yaml"
     description="See the manifest that declares lifecycle, MCP, and integration requirements for an app."
+  />
+  <DocCard
+    title="Publishing Outputs"
+    eyebrow="Workspace Visibility"
+    href="/app-development/applications/publishing-outputs"
+    description="See how apps publish durable workspace outputs and turn-scoped artifacts back into the environment."
   />
 </DocCards>

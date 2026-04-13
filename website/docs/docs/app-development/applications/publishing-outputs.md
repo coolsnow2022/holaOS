@@ -1,92 +1,143 @@
 # Publishing Outputs
 
-Workspace outputs are the durable records that make an app's work visible in Holaboss.
+Workspace outputs are durable runtime records that make an app's work visible outside the app itself.
 
-Use outputs for items the operator should be able to revisit later, such as:
+The source of truth is:
 
-- drafts
-- queued items
-- published content
-- synced external records
-- app resources that need a stable workspace representation
+- `sdk/bridge/src/workspace-outputs.ts`
+- `sdk/bridge/src/presentation.ts`
+- `sdk/bridge/src/turn-context.ts`
+- `sdk/bridge/test/workspace-outputs.test.ts`
 
-## Output lifecycle
+## There Are Two Publishing Paths
 
-<DocSteps>
-  <DocStep title="Create the local record">
-    Store the app's canonical record in SQLite or the app's local data layer first.
-  </DocStep>
-  <DocStep title="Create a workspace output">
-    Call `createAppOutput()` when the record should appear in the Holaboss workspace.
-  </DocStep>
-  <DocStep title="Update status over time">
-    Use `updateAppOutput()` when the record moves from draft to queued, published, sent, or synced.
-  </DocStep>
-  <DocStep title="Keep metadata consistent">
-    Make sure the workspace output metadata still points back to the local record id.
-  </DocStep>
-</DocSteps>
-
-## Output fields
-
-The bridge currently writes the following important fields:
-
-| Field | Purpose |
+| Use case | Helper |
 | --- | --- |
-| `outputType` | Category of output, such as a post or thread |
-| `title` | Human-readable title shown in workspace views |
-| `moduleId` | The app that owns the record |
-| `moduleResourceId` | App-local resource id used for cross-linking |
-| `platform` | Optional platform label, such as a social network or external system |
-| `status` | Draft, queued, published, sent, or another lifecycle state |
-| `metadata` | Extra JSON metadata for view and sync information |
+| Durable workspace-visible record | `createAppOutput()` and `updateAppOutput()` |
+| Artifact tied to the current assistant turn | `publishSessionArtifact()` |
 
-## Status design
+Use outputs for durable operator-facing state. Use session artifacts for results that should appear under the active assistant turn.
 
-Use statuses that describe the real lifecycle of the item.
+## When Publishing Is Available
 
-Good examples:
+The bridge only publishes when it can resolve:
 
-- `draft`
-- `queued`
-- `published`
-- `sent`
-- `synced`
+- a workspace API URL
+- an active workspace id
 
-Keep the status vocabulary consistent within an app. Do not invent new words for the same lifecycle step.
+That comes from:
 
-## Good publishing behavior
+- `WORKSPACE_API_URL`, or a URL derived from the integration broker URL
+- `HOLABOSS_WORKSPACE_ID`
 
-- Create the output once the item is meaningful to the operator.
-- Update it when the real-world action completes.
-- Preserve the local record id in metadata.
-- Use a stable title that helps the operator identify the item later.
-- Avoid publishing transient internal state unless the operator needs it.
+If publishing is unavailable, the helpers return `null` instead of breaking local development.
 
-## App resource presentations
+## Durable Workspace Outputs
 
-When an output should open into a specific resource view, use `buildAppResourcePresentation({ view, path })`.
+```ts
+import { createAppOutput, updateAppOutput } from "@holaboss/bridge";
 
-That keeps the workspace UI consistent and prevents each app from inventing its own navigation shape.
+const output = await createAppOutput({
+  outputType: "draft_post",
+  title: draft.title,
+  moduleId: "twitter",
+  moduleResourceId: draft.id,
+  status: "queued",
+  metadata: {
+    view: "drafts",
+  },
+});
 
-## Example pattern
+if (output) {
+  await updateAppOutput(output.id, {
+    status: "published",
+    moduleResourceId: published.id,
+  });
+}
+```
 
-The shipped apps use this general order:
+Current helper behavior:
 
-1. Save a draft locally.
-2. Create the workspace output.
-3. Queue or publish the external action.
-4. Patch the output with the final status.
+- `createAppOutput()` sends `workspace_id`, `output_type`, `title`, `module_id`, `module_resource_id`, `platform`, and `metadata`
+- if you request a non-`draft` status, the helper creates first and patches immediately
+- `updateAppOutput()` only sends fields you actually changed
+- both helpers throw on non-`2xx` API responses
 
-That pattern works well for social posts, email drafts, and other multi-step workflows.
+## Session Artifacts
 
-## When not to publish
+Use `publishSessionArtifact()` when the result belongs to the active assistant turn.
 
-Do not create an output for:
+```ts
+import {
+  publishSessionArtifact,
+  resolveHolabossTurnContext,
+} from "@holaboss/bridge";
 
-- ephemeral helper data
-- internal retries
-- throwaway preview state
-- request payloads that are never meant to be revisited
+const turn = resolveHolabossTurnContext(request.headers);
 
-If the operator will not want to inspect it later, keep it local.
+if (turn) {
+  await publishSessionArtifact(turn, {
+    artifactType: "draft_post",
+    externalId: draft.id,
+    title: draft.title,
+    moduleId: "twitter",
+    moduleResourceId: draft.id,
+    metadata: {
+      stage: "draft",
+    },
+  });
+}
+```
+
+`publishSessionArtifact()` writes to `/api/v1/agent-sessions/:sessionId/artifacts` and supports:
+
+- `artifactType`
+- `externalId`
+- `title`
+- `moduleId`
+- `moduleResourceId`
+- `platform`
+- `metadata`
+- optional `artifactId`
+- optional `changeType`
+
+## Recovering Turn Context
+
+`resolveHolabossTurnContext(headers)` reads:
+
+- `x-holaboss-workspace-id`
+- `x-holaboss-session-id`
+- `x-holaboss-input-id`
+
+If the workspace header is missing, it falls back to `HOLABOSS_WORKSPACE_ID`. If the workspace id or session id cannot be resolved, it returns `null`.
+
+That behavior is deliberate: artifact publishing should only happen when the request is actually associated with a turn.
+
+## Resource Presentation
+
+When an output or artifact should reopen a specific app resource, attach a stable presentation shape:
+
+```ts
+import { buildAppResourcePresentation } from "@holaboss/bridge";
+
+const presentation = buildAppResourcePresentation({
+  view: "drafts",
+  path: `/drafts/${draft.id}`,
+});
+```
+
+The helper normalizes `path` so it always starts with `/`.
+
+## Production Rules
+
+- persist your app's canonical local record before publishing
+- treat `null` as "publishing unavailable here", not success
+- use workspace outputs for durable state an operator should revisit
+- use session artifacts for turn-scoped visibility
+- update outputs as the real app record changes status
+
+## Validation
+
+```bash
+npm run sdk:bridge:test
+```

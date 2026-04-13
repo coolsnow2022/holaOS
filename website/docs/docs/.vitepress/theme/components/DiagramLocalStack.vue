@@ -2,23 +2,23 @@
   <div class="hb-diagram-stack">
     <div class="hb-diagram-stack__pipeline">
       <!-- Desktop -->
-      <div class="hb-diagram-stack__layer hb-diagram-stack__layer--surface">
+      <section class="hb-diagram-stack__layer hb-diagram-stack__layer--surface">
         <div class="hb-diagram-stack__layer-label">🖥️ Desktop</div>
         <div class="hb-diagram-stack__node">
           <span class="hb-diagram-stack__node-name">Electron UI</span>
           <span class="hb-diagram-stack__node-meta">Operator surface</span>
         </div>
-      </div>
+      </section>
 
-      <div class="hb-diagram-stack__arrow">→</div>
+      <div class="hb-diagram-stack__arrow" aria-hidden="true">→</div>
 
       <!-- Runtime -->
-      <div class="hb-diagram-stack__layer hb-diagram-stack__layer--engine">
+      <section class="hb-diagram-stack__layer hb-diagram-stack__layer--engine">
         <div class="hb-diagram-stack__layer-label">⚙️ Runtime Bundle</div>
-        <div class="hb-diagram-stack__node-group">
+        <div class="hb-diagram-stack__runtime-grid">
           <div class="hb-diagram-stack__node">
-            <span class="hb-diagram-stack__node-name">API Server</span>
-            <span class="hb-diagram-stack__node-meta">Fastify :8080</span>
+            <span class="hb-diagram-stack__node-name">Embedded Runtime API</span>
+            <span class="hb-diagram-stack__node-meta">Fastify :5060 in desktop dev</span>
           </div>
           <div class="hb-diagram-stack__node">
             <span class="hb-diagram-stack__node-name">State Store</span>
@@ -31,7 +31,7 @@
                 <span class="hb-diagram-stack__node-name">Harness Host</span>
                 <span class="hb-diagram-stack__node-meta">Runtime-owned bridge</span>
               </div>
-              <div class="hb-diagram-stack__inline-arrow">→</div>
+              <div class="hb-diagram-stack__inline-arrow" aria-hidden="true">→</div>
               <div class="hb-diagram-stack__node hb-diagram-stack__node--compact">
                 <span class="hb-diagram-stack__node-name">Agent Harness</span>
                 <span class="hb-diagram-stack__node-meta">Selected executor</span>
@@ -39,24 +39,24 @@
             </div>
           </div>
         </div>
-      </div>
+      </section>
 
-      <div class="hb-diagram-stack__arrow">→</div>
+      <div class="hb-diagram-stack__arrow" aria-hidden="true">→</div>
 
       <!-- Workspace -->
-      <div class="hb-diagram-stack__layer hb-diagram-stack__layer--context">
+      <section class="hb-diagram-stack__layer hb-diagram-stack__layer--context">
         <div class="hb-diagram-stack__layer-label">📂 Workspace</div>
-        <div class="hb-diagram-stack__node-group">
+        <div class="hb-diagram-stack__workspace-grid">
           <div class="hb-diagram-stack__node">
             <span class="hb-diagram-stack__node-name">Workspace Apps</span>
             <span class="hb-diagram-stack__node-meta">MCP + UI + Jobs</span>
           </div>
           <div class="hb-diagram-stack__node">
             <span class="hb-diagram-stack__node-name">Workspace Files</span>
-            <span class="hb-diagram-stack__node-meta">AGENTS.md · yaml · memory</span>
+            <span class="hb-diagram-stack__node-meta">AGENTS.md · workspace.yaml · apps/skills</span>
           </div>
         </div>
-      </div>
+      </section>
     </div>
   </div>
 </template>
@@ -67,44 +67,33 @@
   border: 1px solid var(--vp-c-divider);
   border-radius: 16px;
   background: var(--vp-c-bg-soft);
-  padding: 32px 24px;
+  padding: 22px 18px;
   container-type: inline-size;
 }
 
 .hb-diagram-stack__pipeline {
   display: grid;
-  grid-template-columns: minmax(160px, 1fr) auto minmax(260px, 1.2fr) auto minmax(
-      160px,
-      1fr
-    );
-  align-items: center;
-  justify-content: center;
-  column-gap: 12px;
+  grid-template-columns:
+    minmax(132px, 0.9fr)
+    auto
+    minmax(240px, 1.3fr)
+    auto
+    minmax(168px, 1fr);
+  align-items: stretch;
+  column-gap: 10px;
 }
 
 .hb-diagram-stack__layer {
   border: 1px solid var(--vp-c-divider);
   border-radius: 12px;
-  padding: 16px;
+  padding: 14px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   background: var(--vp-c-bg);
   transition: border-color 0.2s;
   min-width: 0;
-}
-
-.hb-diagram-stack__layer--surface,
-.hb-diagram-stack__layer--context {
-  width: 100%;
-  max-width: 230px;
-  justify-self: center;
-}
-
-.hb-diagram-stack__layer--engine {
-  width: 100%;
-  max-width: 360px;
-  justify-self: center;
+  height: 100%;
 }
 
 .hb-diagram-stack__layer:hover {
@@ -133,6 +122,11 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--vp-c-divider) 86%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--vp-c-bg-soft) 72%, transparent);
+  padding: 10px 12px;
 }
 
 .hb-diagram-stack__node--compact {
@@ -151,21 +145,23 @@
   color: var(--vp-c-text-3);
 }
 
-.hb-diagram-stack__node-group {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+.hb-diagram-stack__runtime-grid,
+.hb-diagram-stack__workspace-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
 }
 
 .hb-diagram-stack__boundary {
+  grid-column: 1 / -1;
   border: 1px dashed var(--vp-c-divider);
   border-radius: 12px;
-  padding: 12px;
+  padding: 10px 12px;
   background: var(--vp-c-bg-soft);
 }
 
 .hb-diagram-stack__boundary-label {
-  margin-bottom: 10px;
+  margin-bottom: 8px;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -176,61 +172,52 @@
 .hb-diagram-stack__boundary-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .hb-diagram-stack__arrow {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 0 2px;
   color: var(--vp-c-text-3);
-  font-size: 18px;
-  font-weight: 300;
+  font-size: 16px;
+  font-weight: 400;
   flex-shrink: 0;
 }
 
 .hb-diagram-stack__inline-arrow {
   color: var(--vp-c-text-3);
-  font-size: 16px;
+  font-size: 14px;
   flex-shrink: 0;
 }
 
-@container (max-width: 900px) {
+@container (max-width: 720px) {
   .hb-diagram-stack__pipeline {
     grid-template-columns: 1fr;
-    gap: 12px;
-    justify-items: center;
+    gap: 10px;
   }
 
   .hb-diagram-stack__layer--surface,
   .hb-diagram-stack__layer--context,
   .hb-diagram-stack__layer--engine {
-    width: min(100%, 420px);
-    max-width: 420px;
-    justify-self: center;
-    align-items: center;
-    text-align: center;
+    width: 100%;
+    max-width: none;
+    justify-self: stretch;
   }
 
-  .hb-diagram-stack__node-group,
   .hb-diagram-stack__node {
-    align-items: center;
-    text-align: center;
+    align-items: flex-start;
+    text-align: left;
   }
 
   .hb-diagram-stack__boundary {
     width: 100%;
-    max-width: 340px;
-  }
-
-  .hb-diagram-stack__boundary-label {
-    text-align: center;
+    max-width: none;
   }
 
   .hb-diagram-stack__arrow {
-    padding: 0;
     transform: rotate(90deg);
+    justify-self: center;
   }
 
   .hb-diagram-stack__boundary-row {
@@ -239,6 +226,15 @@
 }
 
 @container (max-width: 560px) {
+  .hb-diagram-stack {
+    padding: 18px 14px;
+  }
+
+  .hb-diagram-stack__runtime-grid,
+  .hb-diagram-stack__workspace-grid {
+    grid-template-columns: 1fr;
+  }
+
   .hb-diagram-stack__boundary-row {
     flex-direction: column;
     align-items: stretch;

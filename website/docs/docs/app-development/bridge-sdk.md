@@ -1,6 +1,16 @@
-# Holaboss Bridge SDK
+# Bridge SDK
 
-The Bridge SDK (`@holaboss/bridge`) connects workspace apps to the Holaboss runtime and workspace services. It will be published to npm:
+`@holaboss/bridge` is the runtime-facing helper package for workspace apps. Use it when an app needs to:
+
+- proxy provider calls through the runtime broker
+- publish durable workspace outputs
+- publish turn-scoped session artifacts
+- recover workspace/session context from MCP request headers
+- build stable app-resource links for workspace routing
+
+The source of truth is `sdk/bridge/src/`.
+
+## Install
 
 ::: code-group
 
@@ -22,107 +32,164 @@ bun add @holaboss/bridge
 
 :::
 
-It handles two jobs:
+The package currently targets Node.js `20+`.
 
-1. **Integration proxy** — calling external services (Gmail, GitHub, Twitter, etc.) through the Holaboss broker. Apps declare integration requirements in `app.runtime.yaml`; the broker resolves the connected account and injects credentials per request. The app never handles raw tokens.
-2. **Workspace outputs** — writing durable results back into the active workspace when the app is running inside Holaboss.
+## Export Surface
 
-## Core environment variables
+The public surface from `sdk/bridge/src/index.ts` is:
 
-| Variable | Meaning |
+- `createIntegrationClient(provider)`
+- `buildAppResourcePresentation({ view, path })`
+- `resolveHolabossTurnContext(headers)`
+- `createAppOutput(request)`
+- `updateAppOutput(outputId, request)`
+- `publishSessionArtifact(context, request)`
+
+This package is intentionally narrow. It is not a generic provider SDK and it does not expose raw platform credentials.
+
+## Runtime Surfaces It Calls
+
+| Helper | Runtime endpoint |
 | --- | --- |
-| `HOLABOSS_APP_GRANT` | App grant used to authorize brokered integration calls |
-| `HOLABOSS_WORKSPACE_ID` | Active workspace id used when writing outputs |
-| `HOLABOSS_INTEGRATION_BROKER_URL` | Explicit broker URL when the runtime already knows it |
-| `SANDBOX_RUNTIME_API_PORT` | Preferred runtime API port in managed runtime execution |
-| `SANDBOX_AGENT_BIND_PORT` | Alternate port used when the runtime injects the agent bind port |
-| `WORKSPACE_API_URL` | Base workspace API URL for output persistence |
-| `PORT` | Fallback port when the app is running locally |
+| `createIntegrationClient().proxy(...)` | `POST /api/v1/integrations/broker/proxy` |
+| `createAppOutput()` | `POST /api/v1/outputs` |
+| `updateAppOutput()` | `PATCH /api/v1/outputs/:outputId` |
+| `publishSessionArtifact()` | `POST /api/v1/agent-sessions/:sessionId/artifacts` |
 
-## What the bridge exposes
+## Environment Resolution
 
-### `createIntegrationClient(provider)`
+The source of truth is `sdk/bridge/src/env.ts`.
 
-Creates a proxy client for a named provider.
+| Variable | Current behavior |
+| --- | --- |
+| `HOLABOSS_APP_GRANT` | Required for brokered integration calls |
+| `HOLABOSS_WORKSPACE_ID` | Used for output publishing and as fallback turn context |
+| `HOLABOSS_INTEGRATION_BROKER_URL` | Preferred integration broker base URL |
+| `WORKSPACE_API_URL` | Preferred workspace API base URL |
+| `SANDBOX_RUNTIME_API_PORT` | Preferred local runtime port when deriving URLs |
+| `SANDBOX_AGENT_BIND_PORT` | Fallback local runtime port |
+| `PORT` | Final fallback when deriving a local runtime URL |
 
-Use it when the app needs to call an integration through the Holaboss broker instead of talking to the provider directly.
+Resolution rules that matter in practice:
 
-### `proxy(request)`
+- if `HOLABOSS_INTEGRATION_BROKER_URL` exists and a runtime port is also present, the helper rewrites that URL to the active local port
+- if `HOLABOSS_INTEGRATION_BROKER_URL` is missing, the helper derives `http://127.0.0.1:$PORT/api/v1/integrations`
+- if `WORKSPACE_API_URL` is missing, the helper derives it by stripping `/integrations` from the broker URL
+- output publishing is only available when both a workspace API URL and `HOLABOSS_WORKSPACE_ID` exist
 
-Sends a request through the broker with a method, endpoint, and optional body.
+## Integration Proxy
 
-The bridge handles:
+Use `createIntegrationClient(provider)` when the app needs a provider call that should run through the runtime grant and broker flow.
 
-- the grant token
-- the provider name
-- the broker request envelope
-- basic non-OK response handling
+```ts
+import { createIntegrationClient } from "@holaboss/bridge";
 
-### `buildAppResourcePresentation({ view, path })`
+const gmail = createIntegrationClient("google");
 
-Builds the presentation object used for app resources.
-
-Use it when you want the workspace UI to open a resource in a predictable view and path.
-
-### `createAppOutput(request)`
-
-Creates a workspace output record if the app is running inside a Holaboss workspace.
-
-It returns `null` when output publishing is not available, so callers should guard for that case.
-
-### `updateAppOutput(outputId, request)`
-
-Updates an existing workspace output record.
-
-Use this for status transitions and metadata refreshes after the initial create.
-
-## When publishing is available
-
-The bridge only publishes outputs when it can resolve both:
-
-- the workspace API URL
-- the active workspace id
-
-If either piece is missing, the helper returns `null` instead of throwing during normal local development.
-
-## Proxy flow
-
-```text
-workspace app
-  -> @holaboss/bridge
-  -> integration broker proxy
-  -> provider integration
+const response = await gmail.proxy({
+  method: "POST",
+  endpoint: "/gmail/v1/users/me/messages/send",
+  body: {
+    raw: encodedMessage,
+  },
+});
 ```
 
-## Output flow
+Current behavior from `sdk/bridge/src/integration-proxy.ts`:
 
-```text
-workspace app
-  -> createAppOutput()
-  -> workspace outputs API
-  -> optional updateAppOutput()
+- the app sends `grant`, `provider`, and the proxied request to `/broker/proxy`
+- the helper throws if the broker URL or app grant is missing
+- the helper throws on non-`2xx` broker responses instead of silently degrading
+
+This is the correct path for runtime-bound integrations. Apps should not expect raw provider tokens in their environment.
+
+## Durable Outputs
+
+Use workspace outputs for durable app records that should remain visible in the workspace after the current run finishes.
+
+```ts
+import { createAppOutput, updateAppOutput } from "@holaboss/bridge";
+
+const output = await createAppOutput({
+  outputType: "post",
+  title: "Launch thread",
+  moduleId: "twitter",
+  moduleResourceId: draft.id,
+  status: "queued",
+  metadata: { channel: "x" },
+});
+
+if (output) {
+  await updateAppOutput(output.id, {
+    status: "published",
+    moduleResourceId: published.id,
+  });
+}
 ```
 
-For chat-visible app results tied to an assistant turn, use session artifact publishing instead:
+Current behavior from `sdk/bridge/src/workspace-outputs.ts`:
 
-```text
-workspace app MCP tool
-  -> publishSessionArtifact()
-  -> session artifacts API
-  -> chat artifact chip + app routing
+- `createAppOutput()` returns `null` when publishing is unavailable in local development
+- `createAppOutput()` always creates a draft first, then patches immediately if you request a non-`draft` status
+- `updateAppOutput()` sends only the fields you provide
+- `updateAppOutput()` also returns `null` when publishing is unavailable
+
+## Turn-Scoped Artifacts
+
+Use session artifacts when the result belongs under the active assistant turn rather than only in durable workspace state.
+
+```ts
+import {
+  publishSessionArtifact,
+  resolveHolabossTurnContext,
+} from "@holaboss/bridge";
+
+const turn = resolveHolabossTurnContext(request.headers);
+
+if (turn) {
+  await publishSessionArtifact(turn, {
+    artifactType: "post",
+    externalId: draft.id,
+    title: "Draft ready",
+    moduleId: "twitter",
+    moduleResourceId: draft.id,
+  });
+}
 ```
 
-## Practical usage pattern
+`resolveHolabossTurnContext(headers)` reads:
 
-1. Build local app state first.
-2. Create or update the workspace output when the record is ready.
-3. Keep the output metadata aligned with the app record id.
-4. Update status after the real-world action completes.
+- `x-holaboss-workspace-id`
+- `x-holaboss-session-id`
+- `x-holaboss-input-id`
 
-## Notes from the current implementation
+If the workspace header is missing, it falls back to `HOLABOSS_WORKSPACE_ID`. If the workspace id or session id is unavailable, it returns `null`.
 
-- `createAppOutput()` writes `workspace_id`, `output_type`, `title`, `module_id`, `module_resource_id`, `platform`, and `metadata`.
-- `publishSessionArtifact()` is the preferred path for draft/tool results that should appear under the current assistant response in chat.
-- If a non-draft status is requested at creation time, the helper immediately performs an update after the create.
-- `updateAppOutput()` accepts partial fields so callers can patch only the values that changed.
-- The helper normalizes resource paths to start with `/` before building app resource presentations.
+## Resource Routing
+
+Use `buildAppResourcePresentation()` when an output or artifact should reopen a specific app view.
+
+```ts
+import { buildAppResourcePresentation } from "@holaboss/bridge";
+
+const presentation = buildAppResourcePresentation({
+  view: "posts",
+  path: "posts/post-123",
+});
+```
+
+The helper normalizes `path` so it always starts with `/`.
+
+## Production Rules
+
+- use the bridge for runtime-owned integrations, not direct provider secrets
+- treat `null` from output helpers as "publishing unavailable in this environment", not success
+- persist the app's own canonical record before publishing workspace outputs or artifacts
+- use `resolveHolabossTurnContext()` inside MCP handlers instead of trying to reconstruct turn context manually
+
+## Validation
+
+```bash
+npm run sdk:bridge:typecheck
+npm run sdk:bridge:test
+```

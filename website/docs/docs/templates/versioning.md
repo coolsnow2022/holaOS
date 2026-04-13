@@ -1,58 +1,76 @@
 # Template Versioning
 
-Templates should be versioned like product artifacts. The goal is reproducibility: if someone creates a workspace from a template today, they should be able to create the same starting point later.
+Templates should be versioned like reproducible build inputs, not like loose example folders.
 
-## Recommended strategy
+The important code path is marketplace materialization in `desktop/electron/main.ts`, which accepts:
 
-Use git tags for stable releases and commit SHAs for exact pinning.
+- `template_name`
+- optional `template_ref`
+- optional `template_commit`
 
-| Reference type | Best for | Notes |
+Those values determine what file set gets materialized into the workspace.
+
+## What to Pin
+
+| Reference | Best for | Recommendation |
 | --- | --- | --- |
-| Tag | Stable template releases | Good default for workspace creation flows |
-| Commit SHA | Exact reproducibility | Best when you want an immutable template snapshot |
-| Branch | Active development | Useful for local iteration, not ideal for long-lived public references |
+| tag | stable shared releases | good default |
+| commit SHA | exact reproducibility and audits | best when environment drift matters |
+| branch | active development | avoid for long-lived shared workspaces |
 
-## Versioning policy
+If you need a workspace to be reconstructible later, pin a tag or commit. Do not rely on a moving branch name.
 
-<DocSteps>
-  <DocStep title="Develop on a branch">
-    Make template changes in a normal branch while you are iterating.
-  </DocStep>
-  <DocStep title="Cut a release tag">
-    Tag a stable release when the template is ready for reuse, for example `v0.1.0`.
-  </DocStep>
-  <DocStep title="Pin the reference">
-    Use the tag in the Workspace Manager so materialization always resolves to the same release.
-  </DocStep>
-  <DocStep title="Use SHAs for audits">
-    When you need a forensic record, pin the exact commit SHA that produced the workspace.
-  </DocStep>
-</DocSteps>
+## Marketplace Templates
 
-## Suggested naming
+Marketplace templates should be treated as immutable release inputs.
 
-Keep tags simple and semantic:
+Recommended policy:
 
-- `v0.1.0`
-- `v0.2.0`
-- `v1.0.0`
+1. develop on a normal branch
+2. cut a tag for a stable template release
+3. pass `template_ref` when you want that tagged release
+4. pass `template_commit` when you need an exact snapshot
 
-If a template changes in a backwards-incompatible way, bump the major version. If the layout changes but the public contract stays the same, use minor or patch releases.
+If both a ref and commit are available in your workflow, prefer storing both in the workspace metadata for auditability.
 
-## What should trigger a new release
+## Local Folder Templates
 
-- changes to required root files
-- changes to `workspace.yaml` semantics
-- changes to app manifests or startup assumptions
-- changes to skills that alter behavior in a user-visible way
+Local folder templates are useful for iteration, but they are not reproducible by themselves.
 
-## What should not trigger a release by itself
+In the local-folder path the desktop records template metadata with:
 
-- small wording changes in optional docs
-- non-functional cleanup
-- internal refactors that do not affect the materialized workspace
+- `repo: "local"`
+- `ref: "local"`
+- `path` set to the local folder path during materialization
 
-::: tip
-If a change affects how a fresh workspace starts, treat it like a release-worthy change.
-:::
+That makes local templates good for development, not for externally reproducible distribution. If a local template matters long-term, put it under git and cut a proper release path.
 
+## Workspace Metadata Written at Creation Time
+
+When a template materializes into a workspace and `workspace.yaml` does not already exist, `renderMinimalWorkspaceYaml()` can write template metadata such as:
+
+- `template_id`
+- `template.name`
+- `template.repo`
+- `template.path`
+- `template.ref`
+- optional `template.commit`
+- `template.imported_at`
+
+That metadata is the runtime-visible record of which template initialized the workspace.
+
+## Release-Worthy Changes
+
+Cut a new template release when the materialized workspace changes in a meaningful way, including:
+
+- root policy changes in `AGENTS.md`
+- `workspace.yaml` behavior changes
+- included app manifests or app wiring changes
+- onboarding flow changes in `ONBOARD.md`
+- skill changes that materially change workspace behavior
+
+Do not cut a release just because of small copy edits in optional docs.
+
+## Practical Rule
+
+If a fresh workspace created from the template would behave differently, version it like a real artifact.

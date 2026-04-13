@@ -37,11 +37,11 @@ In this model, `holaOS` is the environment layer: the workspace contract, the ru
 </DocDefinition>
 
 <DocDefinition term="Template" meta="workspace scaffold">
-  A template is the reusable starting shape for a workspace. It packages the initial files, apps, skills, and conventions that a new workspace should inherit. In `holaOS`, templates are one of the portability surfaces of the environment: they make a known operating context reproducible without collapsing the live workspace into one static archive.
+  A template is the reusable starting shape for a workspace. It packages the initial files, apps, skills, and conventions that a new workspace should inherit. In `holaOS`, templates are one of the portability surfaces of the environment: they make a known operating context reproducible without collapsing the live workspace into one static archive. The desktop currently materializes workspaces from empty scaffolds, local template folders, or marketplace templates.
 </DocDefinition>
 
 <DocDefinition term="App" meta="capability module">
-  An app adds a focused capability to a workspace. Apps can provide UI, automation, MCP tools, background jobs, and their own state. Each app declares what integrations it needs in its `app.runtime.yaml` manifest. Think of apps as modular building blocks rather than generic plugins.
+  An app adds a focused capability to a workspace. Apps can provide UI, automation, MCP tools, background jobs, and their own state. Each app declares what integrations it needs in its `app.runtime.yaml` manifest and becomes runtime-managed when the workspace registers it under `applications[]` in `workspace.yaml`. Think of apps as modular building blocks rather than generic plugins.
 </DocDefinition>
 
 <DocDefinition term="Integration" meta="account connection">
@@ -65,7 +65,7 @@ In this model, `holaOS` is the environment layer: the workspace contract, the ru
 </DocDefinition>
 
 <DocDefinition term="Bridge SDK" meta="app integration layer">
-  The Bridge SDK (`@holaboss/bridge`, installed via npm) connects apps to the Holaboss runtime and workspace. It is what lets an app publish outputs, call external services through the integration broker, and integrate cleanly with the rest of the platform.
+  The Bridge SDK (`@holaboss/bridge`, installed via npm) connects apps to the Holaboss runtime and workspace. It is what lets an app publish outputs, publish turn-scoped artifacts, call external services through the integration broker, and integrate cleanly with the rest of the platform.
 </DocDefinition>
 
 <DocDefinition term="Output" meta="durable result">
@@ -110,5 +110,11 @@ In this model, `holaOS` is the environment layer: the workspace contract, the ru
     eyebrow="Execution boundary"
     href="/holaos/agent-harness/"
     description="See what the runtime passes into the harness, what comes back out, and which capability surfaces the current path exposes."
+  />
+  <DocCard
+    title="Build on holaOS"
+    eyebrow="Developer path"
+    href="/build-on-holaos/"
+    description="Move from the system vocabulary into the code-truth developer paths for runtime work, apps, and templates."
   />
 </DocCards>

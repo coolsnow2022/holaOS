@@ -122,3 +122,26 @@ npm run desktop:prepare-runtime
 ```
 
 Use `desktop:prepare-runtime:local` for active runtime development. Use `desktop:prepare-runtime` when you want to test against the published bundle path.
+
+## Read next
+
+<DocCards>
+  <DocCard
+    title="Learning Path"
+    eyebrow="System Model"
+    href="/getting-started/learning-path"
+    description="Understand the environment, workspace, runtime, and harness model before changing internals."
+  />
+  <DocCard
+    title="Start Developing"
+    eyebrow="Local Developer Loop"
+    href="/build-on-holaos/start-developing/"
+    description="Move from bootstrap into the real desktop and runtime development loop used in this repo."
+  />
+  <DocCard
+    title="Build on holaOS"
+    eyebrow="Developer Map"
+    href="/build-on-holaos/"
+    description="Choose the right entrypoint for runtime work, app development, or template authoring."
+  />
+</DocCards>

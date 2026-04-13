@@ -1,92 +1,74 @@
 # Runtime APIs
 
-The runtime exposes HTTP APIs for workspace management, runtime configuration, execution, memory, integrations, outputs, notifications, and app lifecycle control.
+Use this page when you are changing the runtime HTTP surface rather than only the desktop shell.
 
-These APIs are used by the desktop app and by surrounding platform services. They are not intended to be a generic public developer platform; they are the operational surface that keeps a workspace running.
+The source of truth is code:
+
+- `runtime/api-server/src/index.ts`: binds the HTTP server host and port
+- `runtime/api-server/src/app.ts`: registers every route
+- `runtime/api-server/src/app.test.ts`: executable examples for request and response behavior
+- `runtime/state-store/src/store.ts`: durable records returned or mutated by many routes
+
+These APIs are used by the desktop app and by surrounding platform services. They are operational surfaces for running a workspace, not a generic third-party developer platform.
+
+## Launch modes and ports
+
+The same API server shows up under different ports depending on how you started it:
+
+- Running `runtime/api-server/dist/index.mjs` directly defaults to `0.0.0.0:3060` unless `SANDBOX_RUNTIME_API_PORT`, `SANDBOX_AGENT_BIND_PORT`, or `PORT` is set.
+- The packaged runtime launcher defaults to `0.0.0.0:8080` through `runtime/deploy/bootstrap/shared.sh`.
+- The embedded desktop runtime binds to `127.0.0.1:5060` because `desktop/electron/main.ts` launches it that way.
+
+Use the right port before you assume a route is broken.
 
 ## Common endpoint families
 
-| Area | Typical endpoints | Purpose |
+| Area | Representative routes | Backing modules and usual change points |
 | --- | --- | --- |
-| Runtime config and health | `/api/v1/runtime/config`, `/api/v1/runtime/status`, `/api/v1/runtime/system-status` | Read and update runtime settings and health state |
-| Runtime profile | `/api/v1/runtime/profile` | Read and update runtime-owned operator profile state |
-| Workspaces | `/api/v1/workspaces` | Create, list, update, delete, snapshot, export, and materialize workspaces |
-| Files | `/api/v1/workspaces/:workspaceId/files/*` | Read and write workspace files |
-| Agent runs | `/api/v1/agent-runs`, `/api/v1/agent-runs/stream` | Start a run and stream events |
-| Agent sessions and artifacts | `/api/v1/agent-sessions`, `/api/v1/agent-sessions/:id/*` | Create sessions, inspect history, and trace resume state |
-| Browser capability | `/api/v1/capabilities/browser`, `/api/v1/capabilities/browser/tools/:toolId` | Inspect browser availability and execute browser tools |
-| Memory | `/api/v1/memory/search`, `/api/v1/memory/get`, `/api/v1/memory/upsert` | Query and update runtime memory surfaces |
-| Integrations | `/api/v1/integrations/*` | Catalog providers, connections, and bindings |
-| App control | `/api/v1/apps/:appId/start`, `/stop`, `/setup`, `/build-status`, `/ensure-running` | Manage app lifecycle |
-| App ports | `/api/v1/apps/ports` | Resolve the ports assigned to installed apps |
-| Outputs and folders | `/api/v1/outputs`, `/api/v1/output-folders` | Create, list, organize, and update outputs |
-| Notifications | `/api/v1/notifications` | Read and update runtime-backed notifications |
-| Internal orchestration | `/api/v1/internal/workspaces/:workspaceId/resolved-apps/start` | Start all resolved apps for a workspace |
+| Health, config, and profile | `/healthz`, `/api/v1/runtime/config`, `/api/v1/runtime/status`, `/api/v1/runtime/profile` | `runtime-config.ts` and the runtime-config service tests |
+| Browser and runtime tools | `/api/v1/capabilities/browser`, `/api/v1/capabilities/browser/tools/:toolId`, `/api/v1/capabilities/runtime-tools/*` | `desktop-browser-tools.ts`, `runtime-agent-tools.ts`, and harness/tool projection code |
+| Workspaces and files | `/api/v1/workspaces`, `/api/v1/workspaces/:workspaceId/files/*`, `/apply-template`, `/export`, `/snapshot` | `workspace-apps.ts`, `workspace-snapshot.ts`, and workspace materialization helpers |
+| Agent runs and sessions | `/api/v1/agent-runs`, `/api/v1/agent-runs/stream`, `/api/v1/agent-sessions/*` | `runner-worker.ts`, `ts-runner.ts`, `turn-result-summary.ts`, and state-store session tables |
+| Integrations and auth flows | `/api/v1/integrations/*`, `/api/v1/integrations/oauth/*`, `/api/v1/integrations/broker/*` | `integrations.ts`, `integration-broker.ts`, `oauth-service.ts`, and `composio-service.ts` |
+| Memory and post-run system state | `/api/v1/memory/*`, `/api/v1/memory-update-proposals*`, `/api/v1/task-proposals*` | `memory.js`, `user-memory-proposals.js`, `turn-memory-writeback.js`, and queue or evolve workers |
+| Apps and resolved-app orchestration | `/api/v1/apps/*`, `/api/v1/internal/workspaces/:workspaceId/resolved-apps/start` | `workspace-apps.ts`, `app-lifecycle-worker.ts`, and `resolved-app-bootstrap.ts` |
+| Outputs, notifications, and cronjobs | `/api/v1/outputs*`, `/api/v1/output-folders*`, `/api/v1/notifications*`, `/api/v1/cronjobs*` | `cron-worker.ts`, state-store output tables, and the desktop surfaces that render this state |
 
-## Runtime config and profile
+## Streaming surfaces
 
-Use the runtime endpoints when you need to:
+The runtime has several streaming endpoints. If you change event shape or long-running execution behavior, trace these paths first:
 
-- inspect the current model/provider setup
-- verify the runtime is healthy
-- update runtime-level settings
-- read or update the runtime-owned operator profile
+- `POST /api/v1/agent-runs/stream`
+- `GET /api/v1/task-proposals/unreviewed/stream`
+- `GET /api/v1/agent-sessions/:sessionId/outputs/events`
+- `GET /api/v1/agent-sessions/:sessionId/outputs/stream`
 
-## Workspace APIs
+Execution usually crosses `runtime/api-server/src/ts-runner.ts`, the harness registry, the harness host, and the state store before the desktop sees the result.
 
-The workspace endpoints manage the durable workspace shape:
+## How to change the API safely
 
-- create a workspace
-- list available workspaces
-- fetch a workspace by id
-- update workspace metadata
-- delete a workspace
-- apply a template
-- clone a template from a URL
-- read and write workspace files
-- export or snapshot a workspace
+1. Add or update the route in `runtime/api-server/src/app.ts`.
+2. Keep the backing service, worker, or state-store contract in sync.
+3. Add or adjust tests in `runtime/api-server/src/app.test.ts` or the focused package test file.
+4. If the desktop consumes the route, update the Electron IPC bridge and renderer call site too.
 
-This is the main API family behind workspace materialization, onboarding-aware workspace creation, and workspace editing flows.
+## Minimal smoke checks
 
-## Execution and sessions
+For a local embedded desktop runtime:
 
-The execution surface is broader than just starting a run:
+```bash
+curl http://127.0.0.1:5060/healthz
+curl http://127.0.0.1:5060/api/v1/runtime/status
+```
 
-- `POST /api/v1/agent-runs` starts a run
-- `POST /api/v1/agent-runs/stream` starts a run and streams events back
-- `POST /api/v1/agent-sessions` creates a session
-- session/history/artifact endpoints expose the state used to inspect and resume work later
+For standalone runtime debugging, change the port to the one you actually bound, usually `8080` or `3060`.
 
-These endpoints are what the runtime uses when it needs turn-level execution, session continuity, and event streaming.
+## Validation
 
-## Capability and environment APIs
+```bash
+npm run runtime:api-server:typecheck
+npm run runtime:api-server:test
+npm run runtime:test
+```
 
-Several endpoint families exist because the runtime owns more than turn execution:
-
-- browser capability endpoints expose the current desktop-browser surface
-- memory endpoints expose durable and runtime-owned memory operations
-- integration endpoints expose provider catalogs, connected accounts, and binding flows
-- outputs and notifications expose reviewable product state that the desktop renders directly
-
-## App lifecycle
-
-Apps are controlled through lifecycle endpoints such as:
-
-- start
-- stop
-- setup
-- ensure-running
-- build-status
-
-App lifecycle is driven by the app manifest. The runtime reads `app.runtime.yaml`, resolves the declared commands, and then starts or stops the app accordingly.
-
-For public documentation, the key idea is simple: the runtime only needs the manifest contract. It does not care what implementation framework the app uses internally.
-
-## Practical takeaway
-
-If you are building against the runtime, think in these operational slices:
-
-1. workspace and file APIs for durable authored state
-2. execution and session APIs for run lifecycle
-3. memory, integration, output, and notification APIs for runtime-owned system state
-4. app lifecycle APIs for app-specific behavior
+Use `runtime/api-server/src/app.test.ts` as the fastest executable reference when you are unsure what an endpoint is expected to accept or return.

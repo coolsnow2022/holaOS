@@ -1,88 +1,121 @@
 # MCP Tools
 
-MCP tools are the primary way a workspace app participates in the Holaboss agent loop.
+MCP tools are how a workspace app becomes callable from the runtime.
 
-The agent does not care about your internal implementation details. It cares that the tool name is obvious, the input schema is strict, and the output is easy to parse.
+The runtime-facing contract is split across:
 
-## Tool naming
+- your MCP server implementation
+- `app.runtime.yaml`
+- `workspace.yaml` `mcp_registry`
 
-Use a stable app prefix.
+The source of truth is:
 
-Examples from the current apps:
+- `runtime/api-server/src/workspace-apps.ts`
+- `runtime/api-server/src/app.ts`
+- `runtime/api-server/src/app.test.ts`
 
-- `twitter_create_post`
-- `twitter_publish_post`
-- `gmail_search`
-- `gmail_draft_reply`
-- `gmail_send_draft`
+## Manifest Name vs Runtime Tool Id
 
-Some starter templates still use placeholder names like `module_create_post`. Replace those before shipping the app.
+In `app.runtime.yaml`, you declare raw tool names:
 
-## Good tool shape
-
-<DocSteps>
-  <DocStep title="One tool, one job">
-    Keep each tool focused on a single user-intent. Avoid giant tools that combine search, edit, and publish in one call.
-  </DocStep>
-  <DocStep title="Validate input with zod">
-    Use explicit field types and short descriptions so the agent can form a correct request.
-  </DocStep>
-  <DocStep title="Return machine-readable text">
-    The current shipped apps return JSON inside text content, which makes the output easy to inspect and forward.
-  </DocStep>
-  <DocStep title="Mark failures clearly">
-    Return an error payload when the tool cannot complete the requested action.
-  </DocStep>
-</DocSteps>
-
-## Recommended tool categories
-
-| Category | Example | Why it helps |
-| --- | --- | --- |
-| Create | `twitter_create_post` | Lets the agent create a draft record immediately |
-| List | `gmail_list_drafts` | Gives the agent a bounded view of local state |
-| Inspect | `twitter_get_post` | Lets the agent re-read a specific record |
-| Action | `twitter_publish_post` | Starts a durable workflow such as queueing or publishing |
-| Status | `twitter_get_publish_status` | Gives the agent a safe follow-up query |
-
-## Error handling
-
-Follow the same pattern used in the shipped apps:
-
-```ts
-if (!post) {
-  return { content: [{ type: "text" as const, text: "Post not found" }], isError: true }
-}
+```yaml
+mcp:
+  tools:
+    - create_post
+    - publish_post
 ```
 
-That shape is simple, explicit, and easy for the agent to recover from.
+The runtime then reconciles `workspace.yaml` so the allowlisted tool ids become:
 
-## Practical tips
+- `my_app.create_post`
+- `my_app.publish_post`
 
-- Prefer JSON payloads over prose responses.
-- Keep summaries short when the result is large.
-- Do not hide side effects behind read-only sounding tool names.
-- If a tool queues work, return the job id or record id immediately.
-- If a tool is unsafe, make the action explicit in the tool name and description.
+That prefixing is part of the contract. The app server can expose `create_post`, but the workspace registry is server-qualified.
 
-## Transport and health
+## What the Runtime Writes
 
-Current apps expose MCP over SSE and serve a lightweight health endpoint:
+When `mcp.tools` is declared, `writeWorkspaceMcpRegistryEntry()` updates:
 
-- `/mcp/health`
-- `/mcp/sse`
-- `/mcp/messages`
+- `mcp_registry.servers.my_app`
+- `mcp_registry.allowlist.tool_ids`
 
-The runtime manifest should point at the same path your server actually serves.
+The server entry is written as:
 
-## When to add a tool
+```yaml
+mcp_registry:
+  servers:
+    my_app:
+      type: remote
+      url: http://localhost:$MCP_PORT/mcp/sse
+      enabled: true
+      timeout_ms: 30000
+```
 
-Add a tool only when the agent needs to:
+The allowlist entries are written as `app_id.tool_name`, for example `my_app.create_post`.
 
-- create a record
-- update a record
-- inspect state
-- start a workflow
-- check progress
+## When Registry Reconciliation Runs
 
-If the agent does not need to invoke it, keep it out of MCP and expose it only through the UI.
+There are two important write paths:
+
+1. `POST /api/v1/apps/install-archive` writes the app entry and attempts to write MCP registry state after install
+2. `reconcileAppMcpRegistry()` runs after app start and rewrites the same entries idempotently
+
+That second step matters because it auto-heals stale MCP registry state when app ports or tool lists changed.
+
+## Health Requirements
+
+An MCP app is only usable when the runtime considers it healthy. Today that requires both:
+
+- `GET http://localhost:$PORT/` returns `2xx` or `3xx`
+- `GET http://localhost:$MCP_PORT<healthchecks.mcp.path>` returns `200`
+
+Be explicit in the manifest:
+
+```yaml
+healthchecks:
+  mcp:
+    path: /mcp/health
+
+mcp:
+  transport: http-sse
+  port: 13100
+  path: /mcp/sse
+  tools:
+    - create_post
+```
+
+Do not rely on the runtime guessing your MCP path correctly. Some helpers default to `/mcp`, some write `/mcp/sse` when no path is supplied, so explicit config is safer.
+
+## Tool Design Rules That Fit This Runtime
+
+- keep tools narrow and composable
+- choose names that still read cleanly after app-id prefixing
+- return machine-readable JSON when the result feeds another model step
+- make write operations obvious from the tool name
+- return durable ids when the operation creates or mutates state
+
+Good names:
+
+- `create_post`
+- `list_posts`
+- `get_post`
+- `publish_post`
+- `get_publish_status`
+
+## Verification Loop
+
+When you add or change a tool:
+
+1. start the app through the runtime
+2. confirm the HTTP root and MCP health route pass
+3. inspect `workspace.yaml`
+4. confirm `mcp_registry.allowlist.tool_ids` contains entries such as `my_app.create_post`
+5. confirm `mcp_registry.servers.my_app.url` points at the current MCP port and path
+
+The executable tests for this flow live in `runtime/api-server/src/app.test.ts`.
+
+## Validation
+
+```bash
+npm run runtime:api-server:test
+```

@@ -1,16 +1,40 @@
 # Desktop Internals
 
-Use this page when you are expanding the desktop shell itself rather than only adjusting workspace content or runtime configuration.
+Use this page when you are changing the Electron shell, renderer-to-main contracts, BrowserView behavior, or the embedded runtime launch path.
+
+## Desktop execution model
+
+`npm run desktop:dev` is a four-process loop:
+
+- `vite` for the renderer
+- `tsup --watch` for Electron main and preload output
+- `node scripts/watch-runtime-bundle.mjs` to restage the embedded runtime when `runtime/` changes
+- `electronmon out/dist-electron/main.cjs` to run the app and restart it when the built Electron entrypoint changes
+
+That means desktop work is usually spread across four boundaries: React renderer code, preload bridge code, Electron main-process code, and the staged runtime bundle under `desktop/out/runtime-<platform>`.
 
 ## Main code seams
 
-- `desktop/src/components/layout/AppShell.tsx`: the main shell composition. This is where the agent pane, file explorer pane, browser panes, central display, inbox/proactive operations, marketplace/publish flows, and notification flow are coordinated.
-- `desktop/src/components/panes/BrowserPane.tsx`, `SpaceBrowserExplorerPane.tsx`, and `SpaceBrowserDisplayPane.tsx`: browser UI surfaces, including the `user` and `agent` browser spaces.
+- `desktop/src/components/layout/AppShell.tsx`: the shell composition and top-level product routing. This is where the agent pane, browser panes, file explorer, app surfaces, operations drawer, notifications, and settings overlays are coordinated.
+- `desktop/src/lib/workspaceDesktop.tsx` and `desktop/src/lib/workspaceSelection.tsx`: renderer-side workspace state and shell coordination.
+- `desktop/src/components/panes/BrowserPane.tsx`, `SpaceBrowserExplorerPane.tsx`, and `SpaceBrowserDisplayPane.tsx`: the browser-space UI for the `user` and `agent` browser surfaces.
 - `desktop/src/components/panes/FileExplorerPane.tsx`: workspace file explorer, previews, editing, bookmarking, and file-watch behavior.
-- `desktop/src/components/layout/NotificationToastStack.tsx`: desktop notification presentation and activation behavior.
-- `desktop/electron/preload.ts`: the renderer-to-main bridge exposed as `window.electronAPI`.
-- `desktop/src/types/electron.d.ts`: the typed contract for that bridge. This is the best single place to inspect what the renderer is allowed to call.
-- `desktop/electron/main.ts`: the main-process implementation for the IPC contract, BrowserView orchestration, runtime config, workspace actions, file system actions, and browser state.
+- `desktop/src/components/layout/NotificationToastStack.tsx`: runtime-backed notification rendering and activation behavior.
+- `desktop/electron/preload.ts`: the renderer-to-main bridge exposed on `window.electronAPI`.
+- `desktop/src/types/electron.d.ts`: the typed source of truth for the preload bridge. If the renderer can call it, it should be declared here.
+- `desktop/electron/main.ts`: the main-process implementation for IPC, BrowserView orchestration, embedded runtime startup, workspace actions, file system actions, and browser state.
+
+## Embedded runtime lifecycle
+
+The desktop does not talk to the runtime through a vague helper. `desktop/electron/main.ts` owns the launch path:
+
+1. Resolve the staged runtime bundle under `desktop/out/runtime-<platform>` or an override such as `HOLABOSS_RUNTIME_ROOT`.
+2. Validate that the bundle includes the executable, packaged Node runtime, packaged Python runtime, `package-metadata.json`, and `runtime/api-server/dist/index.mjs`.
+3. Spawn `bin/sandbox-runtime` with desktop-owned env such as `HB_SANDBOX_ROOT`, `SANDBOX_AGENT_BIND_HOST=127.0.0.1`, `SANDBOX_AGENT_BIND_PORT=5060`, `SANDBOX_AGENT_HARNESS`, `HOLABOSS_RUNTIME_DB_PATH`, and the bridge settings.
+4. Wait for the embedded runtime health check to pass.
+5. Stream stdout and stderr into `runtime.log` under the Electron `userData` directory.
+
+If you are debugging runtime startup from desktop, inspect `runtime.log` and the `sandbox-host` directory under Electron `userData` before you change UI code.
 
 ## Renderer-to-main contract
 
@@ -30,7 +54,11 @@ Important namespaces include:
 - `ui`: theme, settings routing, and external-link helpers
 - `workbench`: browser-opening handoff from workbench surfaces into the main shell
 
-If you change the desktop contract, update both `desktop/electron/preload.ts` and `desktop/src/types/electron.d.ts`.
+If you change the desktop contract, update all three layers together:
+
+1. `desktop/electron/preload.ts`
+2. `desktop/src/types/electron.d.ts`
+3. the `ipcMain` handler in `desktop/electron/main.ts`, usually wired through `handleTrustedIpc(...)`
 
 ## Browser protocol
 
@@ -64,7 +92,7 @@ The current contract includes:
 
 That keeps file access centralized in the main process and makes workspace-relative behavior auditable.
 
-## Notification contract
+## Notification and runtime-backed product state
 
 Desktop notifications are runtime-backed, not purely renderer-local.
 
@@ -88,12 +116,9 @@ The shell maintains a central display surface that can project:
 
 That routing currently lives in `AppShell.tsx` through `spaceDisplayView`. If you are adding a new display mode, start there and trace the corresponding pane/component path.
 
-## Development guidance
+## Verification after desktop changes
 
-When changing desktop internals:
-
-- keep renderer/main boundaries explicit
-- change typed bridge contracts together with their IPC implementations
-- be careful with BrowserView lifecycle and bounds syncing
-- preserve workspace-aware routing instead of introducing global singleton UI state
-- treat runtime-backed notifications, sessions, and outputs as product state, not as ad hoc local UI caches
+- `npm run desktop:typecheck` is the minimum validation for every desktop change.
+- Run `npm run desktop:e2e` when the change crosses renderer, preload, main-process, or embedded-runtime boundaries.
+- Use `bash desktop/scripts/check-runtime-status.sh` when the embedded runtime fails to start, a workspace looks corrupted, or app lifecycle behavior diverges from the desktop UI.
+- Preserve the renderer/main boundary. Do not move file system access, BrowserView ownership, or runtime process management back into React state.
