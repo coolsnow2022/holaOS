@@ -5,6 +5,7 @@ import { readFile } from "node:fs/promises";
 const DESKTOP_PACKAGE_PATH = new URL("../package.json", import.meta.url);
 const BUILDER_CONFIG_PATH = new URL("../electron-builder.config.cjs", import.meta.url);
 const RUN_ELECTRON_BUILDER_PATH = new URL("../scripts/run-electron-builder.mjs", import.meta.url);
+const NPM_RUNNER_PATH = new URL("../scripts/npm-runner.mjs", import.meta.url);
 const CI_WORKFLOW_PATH = new URL("../../.github/workflows/ci.yml", import.meta.url);
 
 test("windows packaging scripts prepare the packaged config before building installers", async () => {
@@ -66,10 +67,45 @@ test("windows packaging config and CI workflow support optional signing and NSIS
   assert.match(workflowSource, /Get-AuthenticodeSignature -FilePath \$stablePath/);
   assert.doesNotMatch(workflowSource, /WINDOWS_CERTIFICATE:/);
   assert.match(workflowSource, /npm run dist:win:local/);
+  assert.match(workflowSource, /if \(\$LASTEXITCODE -ne 0\) \{/);
+  assert.match(workflowSource, /npm run dist:win:local failed with exit code \$LASTEXITCODE/);
+  assert.match(workflowSource, /Contents of desktop\/out\/release:/);
   assert.match(workflowSource, /generated_installer_path=/);
   assert.match(workflowSource, /\$manifestName = if \(\$primaryChannel -eq "beta"\) \{ "beta\.yml" \} else \{ "latest\.yml" \}/);
   assert.match(workflowSource, /\$manifestName was not generated/);
   assert.match(workflowSource, /Get-ChildItem -Path desktop\/out\/release -File -Filter \*\.blockmap/);
   assert.match(workflowSource, /uses: actions\/upload-artifact@v7/);
   assert.match(workflowSource, /name: \$\{\{ env\.DESKTOP_ASSET_PREFIX \}\}-\$\{\{ inputs\.release_tag \}\}/);
+});
+
+test("desktop helper scripts invoke npm through the Windows-safe runner", async () => {
+  const [
+    npmRunnerSource,
+    ensureAppSdkSource,
+    ensureRuntimeClientSource,
+    ensureEditorSource,
+    ensureRuntimeBundleSource,
+  ] = await Promise.all([
+    readFile(NPM_RUNNER_PATH, "utf8"),
+    readFile(new URL("../scripts/ensure-app-sdk.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../scripts/ensure-runtime-client.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../scripts/ensure-editor.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../scripts/ensure-runtime-bundle.mjs", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(npmRunnerSource, /process\.platform === "win32"/);
+  assert.match(npmRunnerSource, /process\.env\.npm_execpath/);
+  assert.match(npmRunnerSource, /command: process\.execPath/);
+  assert.match(npmRunnerSource, /command: "npm\.cmd"/);
+  assert.match(npmRunnerSource, /failed to spawn \$\{command\}/);
+
+  for (const source of [
+    ensureAppSdkSource,
+    ensureRuntimeClientSource,
+    ensureEditorSource,
+    ensureRuntimeBundleSource,
+  ]) {
+    assert.match(source, /import \{ runNpm \} from "\.\/npm-runner\.mjs";/);
+    assert.doesNotMatch(source, /spawnSync\("npm"/);
+  }
 });

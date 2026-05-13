@@ -651,6 +651,9 @@ jobs:
           Write-Host "Building Azure Trusted Signing Windows installer."
 
           npm run dist:win:local
+          if ($LASTEXITCODE -ne 0) {
+            throw "npm run dist:win:local failed with exit code $LASTEXITCODE"
+          }
 
           $installer = Get-ChildItem -Path out/release -File -Recurse |
             Where-Object {
@@ -662,6 +665,14 @@ jobs:
             Select-Object -First 1
 
           if (-not $installer) {
+            if (Test-Path -LiteralPath "out/release") {
+              Write-Host "Contents of desktop/out/release:"
+              Get-ChildItem -Path out/release -Recurse |
+                Select-Object FullName, Length |
+                Format-Table -AutoSize
+            } else {
+              Write-Host "desktop/out/release does not exist."
+            }
             throw "No Windows installer .exe was produced under desktop/out/release."
           }
 
