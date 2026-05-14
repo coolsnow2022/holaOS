@@ -41,6 +41,7 @@ import catppuccinCollection from "@iconify-json/catppuccin/icons.json";
 
 addCollection(catppuccinCollection as Parameters<typeof addCollection>[0]);
 import { SimpleMarkdown } from "@/components/marketplace/SimpleMarkdown";
+import { HtmlPreviewFrame } from "@/components/panes/HtmlPreviewFrame";
 import { PresentationPreview } from "@/components/panes/PresentationPreview";
 import {
   areTablePreviewSheetsEqual,
@@ -3602,10 +3603,11 @@ export function FileExplorerPane({
           ) : isHtmlPreview && textPreviewMode === "preview" ? (
             previewDraft.trim() ? (
               <div className="h-full overflow-hidden bg-muted p-4">
-                <iframe
+                <HtmlPreviewFrame
                   title={preview.name}
-                  sandbox=""
-                  srcDoc={previewDraft}
+                  html={previewDraft}
+                  onOpenLinkInBrowser={openPreviewLink}
+                  onOpenLocalLink={handleLocalLinkInPreview}
                   className="h-full w-full rounded-lg border border-border bg-white"
                 />
               </div>

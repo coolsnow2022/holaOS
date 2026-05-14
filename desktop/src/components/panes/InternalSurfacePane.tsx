@@ -12,6 +12,8 @@ import {
   cloneTablePreviewSheets,
   SpreadsheetEditor,
 } from "@/components/panes/SpreadsheetEditor";
+import { HtmlPreviewFrame } from "@/components/panes/HtmlPreviewFrame";
+import { SimpleMarkdown } from "@/components/marketplace/SimpleMarkdown";
 import { Button } from "@/components/ui/button";
 import {
   Tooltip,
@@ -160,6 +162,39 @@ export function InternalSurfacePane({
   }, [onOpenLinkInBrowser]);
 
   const previewAbsolutePath = preview?.absolutePath ?? null;
+  const handleLocalLinkInPreview = useCallback(
+    (href: string) => {
+      if (!onOpenLocalLink) {
+        return;
+      }
+      let raw = href.trim();
+      if (!raw) {
+        return;
+      }
+      if (raw.toLowerCase().startsWith("file://")) {
+        raw = raw.slice(7);
+      }
+      let cleaned = raw;
+      try {
+        cleaned = decodeURI(raw);
+      } catch {
+        cleaned = raw;
+      }
+      let absolute = cleaned;
+      if (!isAbsolutePath(cleaned)) {
+        const previewPath = previewAbsolutePath?.trim() ?? "";
+        const baseDir = previewPath
+          ? dirnameFromAbsolutePath(previewPath)
+          : (workspaceRootPath?.trim() ?? "");
+        if (!baseDir) {
+          return;
+        }
+        absolute = joinPath(baseDir, cleaned);
+      }
+      onOpenLocalLink(absolute);
+    },
+    [onOpenLocalLink, previewAbsolutePath, workspaceRootPath],
+  );
 
   useEffect(() => {
     if (!selectedWorkspaceId) {
@@ -327,9 +362,7 @@ export function InternalSurfacePane({
 
   const isMarkdownPreview = isMarkdownPreviewPayload(preview);
   const isHtmlPreview = isHtmlPreviewPayload(preview);
-  // Markdown is now WYSIWYG (handled by @holaboss/editor) — no preview/edit
-  // toggle. Only HTML still has a preview ↔ source-edit duality.
-  const supportsRenderedTextPreview = isHtmlPreview;
+  const supportsRenderedTextPreview = isMarkdownPreview || isHtmlPreview;
   const isDirty =
     preview?.kind === "text" && preview.isEditable
       ? previewDraft !== (preview.content ?? "")
@@ -499,10 +532,11 @@ export function InternalSurfacePane({
       if (htmlContent && htmlContent.trim()) {
         return (
           <div className="grid min-h-0 gap-3">
-            <iframe
+            <HtmlPreviewFrame
               title="Output preview"
-              sandbox=""
-              srcDoc={htmlContent}
+              html={htmlContent}
+              onOpenLinkInBrowser={openPreviewLink}
+              onOpenLocalLink={handleLocalLinkInPreview}
               className="min-h-[60vh] w-full rounded-2xl border border-border bg-white"
             />
           </div>
@@ -629,20 +663,43 @@ export function InternalSurfacePane({
 
           {/* Content */}
           {isMarkdownPreview ? (
-            <MarkdownEditor
-              value={previewDraft}
-              onChange={setPreviewDraft}
-              readOnly={!preview.isEditable}
-              placeholder="Press / for commands…"
-              className="min-h-0 flex-1"
-            />
+            textPreviewMode === "preview" ? (
+              previewDraft.trim() ? (
+                <div className="min-h-0 flex-1 overflow-auto">
+                  <div className="mx-auto max-w-3xl px-10 py-12">
+                    <SimpleMarkdown
+                      className="file-preview-markdown"
+                      onLinkClick={openPreviewLink}
+                      onLocalLinkClick={handleLocalLinkInPreview}
+                    >
+                      {previewDraft}
+                    </SimpleMarkdown>
+                  </div>
+                </div>
+              ) : (
+                <div className="grid min-h-0 flex-1 place-items-center px-6 text-center">
+                  <div className="text-xs text-muted-foreground">
+                    Empty file — switch to Edit to add content.
+                  </div>
+                </div>
+              )
+            ) : (
+              <MarkdownEditor
+                value={previewDraft}
+                onChange={setPreviewDraft}
+                readOnly={!preview.isEditable}
+                placeholder="Press / for commands…"
+                className="min-h-0 flex-1"
+              />
+            )
           ) : isHtmlPreview && textPreviewMode === "preview" ? (
             previewDraft.trim() ? (
               <div className="min-h-0 flex-1 overflow-hidden bg-muted p-4">
-                <iframe
+                <HtmlPreviewFrame
                   title={preview.name}
-                  sandbox=""
-                  srcDoc={previewDraft}
+                  html={previewDraft}
+                  onOpenLinkInBrowser={openPreviewLink}
+                  onOpenLocalLink={handleLocalLinkInPreview}
                   className="h-full w-full rounded-lg border border-border bg-white"
                 />
               </div>
@@ -805,6 +862,7 @@ export function InternalSurfacePane({
     isDirty,
     isMarkdownPreview,
     isSaving,
+    handleLocalLinkInPreview,
     openPreviewLink,
     preview,
     previewDraft,
