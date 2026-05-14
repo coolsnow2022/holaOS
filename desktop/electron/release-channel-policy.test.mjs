@@ -174,7 +174,11 @@ test("manual CI workflow publishes desktop installers without standalone runtime
   assert.match(source, /while IFS= read -r manifest_path; do\s+upload_paths\+=\("\$\{manifest_path\}"\)/);
   assert.match(source, /while IFS= read -r blockmap_path; do\s+upload_paths\+=\("\$\{blockmap_path\}"\)/);
   assert.match(source, /if \[ "\$\{\{ inputs\.release_windows \}\}" = "true" \]; then/);
-  assert.match(source, /find release-assets\/windows-desktop -maxdepth 1 -type f/);
+  assert.match(source, /windows_installer_asset="\$\{windows_release_dir\}\/holaOS-windows-x64-setup\.exe"/);
+  assert.match(source, /missing Windows installer release asset/);
+  assert.match(source, /missing Windows installer blockmap release asset/);
+  assert.match(source, /does not reference holaOS-windows-x64-setup\.exe/);
+  assert.match(source, /missing Windows auto-update manifest release asset/);
   assert.doesNotMatch(source, /holaboss-runtime-windows\.tar\.gz/);
   assert.match(source, /prerelease_flag=\(\)/);
   assert.match(source, /if \[ "\$\{PRERELEASE\}" = "true" \]; then\s+prerelease_flag\+=\(--prerelease\)/);

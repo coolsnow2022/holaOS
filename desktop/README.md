@@ -205,7 +205,7 @@ On pull requests and pushes to `main`, `CI` runs the normal validation jobs only
 - checks out the requested `ref`
 - creates the requested GitHub release in `holaboss-ai/holaOS-releases`
 - builds the signed and notarized macOS app, then uploads the DMG, ZIP, blockmaps, and `latest-mac.yml`
-- builds the signed Windows NSIS installer, then uploads the installer, blockmaps, and `latest.yml`
+- builds the signed Windows NSIS installer, then uploads the installer, blockmap, and channel manifest
 
 Release channel policy:
 - there are no standalone runtime-only GitHub releases anymore

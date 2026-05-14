@@ -820,6 +820,24 @@ jobs:
           $stablePath = Join-Path $PWD "out/release/$env:DESKTOP_RELEASE_ASSET_NAME"
           Copy-Item -LiteralPath $installerPath -Destination $stablePath -Force
 
+          $installerBlockmapPath = "$installerPath.blockmap"
+          $stableBlockmapPath = "$stablePath.blockmap"
+          if (-not (Test-Path -LiteralPath $installerBlockmapPath)) {
+            throw "No Windows installer blockmap was produced for $($installer.Name)."
+          }
+          Copy-Item -LiteralPath $installerBlockmapPath -Destination $stableBlockmapPath -Force
+
+          foreach ($manifestName in @("latest.yml", "beta.yml")) {
+            $manifestPath = Join-Path $PWD "out/release/$manifestName"
+            if (-not (Test-Path -LiteralPath $manifestPath)) {
+              continue
+            }
+            $manifestContent = Get-Content -LiteralPath $manifestPath -Raw
+            $manifestContent = $manifestContent -replace "(?m)^(\s*-\s*url:\s*).+$", "`${1}$env:DESKTOP_RELEASE_ASSET_NAME"
+            $manifestContent = $manifestContent -replace "(?m)^(path:\s*).+$", "`${1}$env:DESKTOP_RELEASE_ASSET_NAME"
+            Set-Content -LiteralPath $manifestPath -Value $manifestContent -Encoding UTF8
+          }
+
           $signature = Get-AuthenticodeSignature -FilePath $stablePath
           if ($signature.Status -ne "Valid") {
             $signature | Format-List *
@@ -853,6 +871,12 @@ jobs:
             throw "$manifestName was not generated"
           }
 
+          $stableInstallerName = "holaOS-windows-x64-setup.exe"
+          $manifestContent = Get-Content -LiteralPath $manifestPath -Raw
+          if ($manifestContent -notmatch [regex]::Escape($stableInstallerName)) {
+            throw "$manifestName does not reference $stableInstallerName"
+          }
+
           if ($primaryChannel -eq "latest") {
             $betaManifestPath = Join-Path $PWD "desktop/out/release/beta.yml"
             Copy-Item -LiteralPath $manifestPath -Destination $betaManifestPath -Force
@@ -861,9 +885,9 @@ jobs:
             }
           }
 
-          $blockmaps = Get-ChildItem -Path desktop/out/release -File -Filter *.blockmap
-          if (-not $blockmaps) {
-            throw "No Windows blockmap was produced under desktop/out/release."
+          $stableBlockmapPath = Join-Path $PWD "desktop/out/release/$stableInstallerName.blockmap"
+          if (-not (Test-Path -LiteralPath $stableBlockmapPath)) {
+            throw "No Windows blockmap was produced for $stableInstallerName."
           }
 
       - name: Upload Windows release artifacts
@@ -871,11 +895,10 @@ jobs:
         with:
           name: ${{ env.DESKTOP_ASSET_PREFIX }}-${{ inputs.release_tag }}
           path: |
-            desktop/out/release/*.exe
-            desktop/out/release/*.yml
-            desktop/out/release/*.blockmap
-            desktop/out/runtime-windows/package-metadata.json
-            desktop/out/runtime-windows/runtime/metadata.json
+            desktop/out/release/${{ env.DESKTOP_RELEASE_ASSET_NAME }}
+            desktop/out/release/${{ env.DESKTOP_RELEASE_ASSET_NAME }}.blockmap
+            desktop/out/release/latest.yml
+            desktop/out/release/beta.yml
           if-no-files-found: error
 
   publish-release:
@@ -977,13 +1000,43 @@ jobs:
           done < <(find release-assets/macos-desktop -maxdepth 1 -name '*.blockmap' -print | sort)
 
           if [ "${{ inputs.release_windows }}" = "true" ]; then
-            while IFS= read -r windows_asset; do
-              upload_paths+=("${windows_asset}")
-            done < <(
-              find release-assets/windows-desktop -maxdepth 1 -type f \
-                \( -name '*.exe' -o -name '*.yml' -o -name '*.blockmap' \) \
-                -print | sort
-            )
+            windows_release_dir="release-assets/windows-desktop"
+            if [ -d "${windows_release_dir}/release" ]; then
+              windows_release_dir="${windows_release_dir}/release"
+            fi
+
+            windows_installer_asset="${windows_release_dir}/holaOS-windows-x64-setup.exe"
+            windows_blockmap_asset="${windows_installer_asset}.blockmap"
+            if [ ! -f "${windows_installer_asset}" ]; then
+              echo "missing Windows installer release asset" >&2
+              find release-assets/windows-desktop -maxdepth 3 -type f -print >&2 || true
+              exit 1
+            fi
+            if [ ! -f "${windows_blockmap_asset}" ]; then
+              echo "missing Windows installer blockmap release asset" >&2
+              find release-assets/windows-desktop -maxdepth 3 -type f -print >&2 || true
+              exit 1
+            fi
+
+            upload_paths+=("${windows_installer_asset}" "${windows_blockmap_asset}")
+
+            windows_manifest_count=0
+            for windows_manifest_asset in "${windows_release_dir}/latest.yml" "${windows_release_dir}/beta.yml"; do
+              if [ ! -f "${windows_manifest_asset}" ]; then
+                continue
+              fi
+              if ! grep -q 'holaOS-windows-x64-setup\.exe' "${windows_manifest_asset}"; then
+                echo "${windows_manifest_asset} does not reference holaOS-windows-x64-setup.exe" >&2
+                exit 1
+              fi
+              upload_paths+=("${windows_manifest_asset}")
+              windows_manifest_count=$((windows_manifest_count + 1))
+            done
+            if [ "${windows_manifest_count}" -eq 0 ]; then
+              echo "missing Windows auto-update manifest release asset" >&2
+              find release-assets/windows-desktop -maxdepth 3 -type f -print >&2 || true
+              exit 1
+            fi
           fi
 
           prerelease_flag=()

@@ -76,6 +76,18 @@ test("windows packaging config and CI workflow support optional signing and NSIS
   assert.match(workflowSource, /AZURE_CLIENT_ID: \$\{\{ secrets\.AZURE_CLIENT_ID \}\}/);
   assert.match(workflowSource, /AZURE_CLIENT_SECRET: \$\{\{ secrets\.AZURE_CLIENT_SECRET \}\}/);
   assert.match(workflowSource, /Get-AuthenticodeSignature -FilePath \$stablePath/);
+  assert.match(workflowSource, /\$installerBlockmapPath = "\$installerPath\.blockmap"/);
+  assert.match(workflowSource, /No Windows installer blockmap was produced for \$\(\$installer\.Name\)\./);
+  assert.ok(
+    workflowSource.includes(
+      '$manifestContent = $manifestContent -replace "(?m)^(\\s*-\\s*url:\\s*).+$", "`${1}$env:DESKTOP_RELEASE_ASSET_NAME"',
+    ),
+  );
+  assert.ok(
+    workflowSource.includes(
+      '$manifestContent = $manifestContent -replace "(?m)^(path:\\s*).+$", "`${1}$env:DESKTOP_RELEASE_ASSET_NAME"',
+    ),
+  );
   assert.doesNotMatch(workflowSource, /WINDOWS_CERTIFICATE:/);
   assert.match(workflowSource, /npm run dist:win:local/);
   assert.match(workflowSource, /if \(\$LASTEXITCODE -ne 0\) \{/);
@@ -84,9 +96,12 @@ test("windows packaging config and CI workflow support optional signing and NSIS
   assert.match(workflowSource, /generated_installer_path=/);
   assert.match(workflowSource, /\$manifestName = if \(\$primaryChannel -eq "beta"\) \{ "beta\.yml" \} else \{ "latest\.yml" \}/);
   assert.match(workflowSource, /\$manifestName was not generated/);
-  assert.match(workflowSource, /Get-ChildItem -Path desktop\/out\/release -File -Filter \*\.blockmap/);
+  assert.match(workflowSource, /\$manifestContent -notmatch \[regex\]::Escape\(\$stableInstallerName\)/);
+  assert.match(workflowSource, /No Windows blockmap was produced for \$stableInstallerName\./);
   assert.match(workflowSource, /uses: actions\/upload-artifact@v7/);
   assert.match(workflowSource, /name: \$\{\{ env\.DESKTOP_ASSET_PREFIX \}\}-\$\{\{ inputs\.release_tag \}\}/);
+  assert.match(workflowSource, /desktop\/out\/release\/\$\{\{ env\.DESKTOP_RELEASE_ASSET_NAME \}\}/);
+  assert.match(workflowSource, /desktop\/out\/release\/\$\{\{ env\.DESKTOP_RELEASE_ASSET_NAME \}\}\.blockmap/);
 });
 
 test("desktop helper scripts invoke npm through the Windows-safe runner", async () => {
