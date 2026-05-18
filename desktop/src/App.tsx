@@ -1,7 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/layout/AppShell";
+import { NewAppShell } from "@/components/layout/new-shell";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
+
+const NEW_SHELL_STORAGE_KEY = "holaboss-new-layout-shell-v1";
 import {
   identifyUmamiUser,
   trackUmamiEvent,
@@ -61,12 +64,24 @@ function App() {
     return installRendererAuthCacheListeners();
   }, []);
 
+  // Side-by-side layout redesign. VITE_NEW_LAYOUT_SHELL=1 forces the new
+  // shell at boot; otherwise reads the user's choice from localStorage
+  // (Settings → Experimental toggles it and reloads).
+  const [useNewShell] = useState(() => {
+    if (import.meta.env.VITE_NEW_LAYOUT_SHELL === "1") return true;
+    try {
+      return localStorage.getItem(NEW_SHELL_STORAGE_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+
   return (
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
           <UmamiIdentity />
-          <AppShell />
+          {useNewShell ? <NewAppShell /> : <AppShell />}
         </TooltipProvider>
       </QueryClientProvider>
     </ErrorBoundary>

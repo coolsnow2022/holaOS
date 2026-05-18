@@ -155,7 +155,7 @@ declare global {
     height: number;
   }
 
-  type UiSettingsPaneSection = "account" | "billing" | "providers" | "integrations" | "submissions" | "settings";
+  type UiSettingsPaneSection = "account" | "billing" | "providers" | "integrations" | "submissions" | "settings" | "experimental";
 
   interface BrowserStatePayload {
     id: string;
@@ -1890,6 +1890,7 @@ interface RuntimeNotificationListOptionsPayload {
       ) => Promise<void>;
       hideAddressSuggestions: () => Promise<void>;
       toggleOverflowPopup: (anchorBounds: BrowserAnchorBoundsPayload) => Promise<void>;
+      onOpenImportProfile: (listener: () => void) => () => void;
       toggleHistoryPopup: (anchorBounds: BrowserAnchorBoundsPayload) => Promise<void>;
       removeHistoryEntry: (historyId: string) => Promise<BrowserHistoryEntryPayload[]>;
       clearHistory: () => Promise<BrowserHistoryEntryPayload[]>;
