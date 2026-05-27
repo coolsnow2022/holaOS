@@ -5610,7 +5610,7 @@ test("claimed input continues when pre-run compaction cannot get below the maint
     workspaceDir,
     sessionDir: path.join(workspaceDir, ".holaboss", "pi-sessions"),
   });
-  sessionManager.appendMessage(piUserMessage("x".repeat(260_000)));
+  sessionManager.appendMessage(piUserMessage("x".repeat(600_000)));
   sessionManager.appendMessage(piAssistantMessage("previous response"));
   store.upsertBinding({
     workspaceId: workspace.id,
@@ -5651,9 +5651,9 @@ test("claimed input continues when pre-run compaction cannot get below the maint
     promptCacheProfile: null,
     contextBudgetDecisions: {
       context_usage: {
-        tokens: 130_100,
+        tokens: 300_100,
         context_window: 400_000,
-        percent: 32.5,
+        percent: 75.025,
       },
     },
     tokenUsage: null,
@@ -5708,9 +5708,9 @@ test("claimed input continues when pre-run compaction cannot get below the maint
       reason: "already_compacted",
       diagnostics: {
         context_usage: {
-          tokens: 130_100,
+          tokens: 300_100,
           contextWindow: 400_000,
-          percent: 32.5,
+          percent: 75.025,
         },
       },
       error: null,
